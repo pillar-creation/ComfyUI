@@ -34,6 +34,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **STEP_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
-print("[ComfyUI-Simple-Face-Mask] v2.3.4 — clip nose side + taper inner canthus")
+print("[ComfyUI-Simple-Face-Mask] v2.3.8 — outer canthus arc bridge")
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

@@ -504,6 +504,82 @@ def _offset_polyline_from_center(
     return out
 
 
+def _offset_polyline_downward(
+    pts: np.ndarray,
+    distance: float,
+    *,
+    inner_end_taper: int = 3,
+) -> np.ndarray:
+    """Extend lower-lid polyline downward (+Y); taper only at inner canthus (polyline end)."""
+    if pts.shape[0] < 1 or distance <= 0:
+        return pts.astype(np.float32)
+    n = len(pts)
+    out = pts.astype(np.float32).copy()
+    taper = max(0, inner_end_taper)
+    for i in range(n):
+        if taper > 0 and i >= n - taper:
+            w = (n - 1 - i) / taper
+        else:
+            w = 1.0
+        out[i, 1] += distance * w
+    return out
+
+
+def _outer_canthus_bridge_mask(
+    height: int,
+    width: int,
+    upper_pts: np.ndarray,
+    lower_pts: np.ndarray,
+    center: np.ndarray,
+    landmarks,
+    outer: int,
+    inner: int,
+    spacing: float,
+) -> np.ndarray:
+    """
+    Fill the outer-canthus wedge: arc between the lateral tips of upper/lower lid bands.
+    Paths are outer → inner; index 0 is the outer canthus.
+    """
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if upper_pts.shape[0] < 2 or lower_pts.shape[0] < 2:
+        return mask.astype(np.float32) / 255.0
+
+    dist_up = max(3.0, spacing * 2.8)
+    dist_low_rad = max(3.0, spacing * 2.5)
+    dist_low_down = max(5.0, spacing * 3.6)
+    upper_ext = _offset_polyline_from_center(
+        upper_pts, center, dist_up, inner_taper=0
+    )
+    lower_rad = _offset_polyline_from_center(
+        lower_pts, center, dist_low_rad, inner_taper=0
+    )
+    lower_down = _offset_polyline_downward(lower_pts, dist_low_down, inner_end_taper=0)
+    lower_ext = np.maximum(lower_rad, lower_down)
+
+    pt_up = upper_ext[0].astype(np.float32)
+    pt_lo = lower_ext[0].astype(np.float32)
+    ox, oy = _landmark_xy(landmarks, outer, width, height)
+    ix, iy = _landmark_xy(landmarks, inner, width, height)
+    corner = np.array([float(ox), float(oy)], dtype=np.float32)
+
+    lateral = np.array([float(ox - ix), float(oy - iy)], dtype=np.float32)
+    lat_len = max(float(np.hypot(lateral[0], lateral[1])), 1e-6)
+    lat_unit = lateral / lat_len
+    bulge = max(spacing * 0.9, 4.0)
+    ctrl = (pt_up + pt_lo) * 0.5 + lat_unit * bulge
+
+    n_arc = max(10, int(spacing * 1.2))
+    ts = np.linspace(0.0, 1.0, n_arc, dtype=np.float32)
+    arc = (
+        (1.0 - ts)[:, np.newaxis] ** 2 * pt_up
+        + 2.0 * (1.0 - ts)[:, np.newaxis] * ts[:, np.newaxis] * ctrl
+        + ts[:, np.newaxis] ** 2 * pt_lo
+    )
+    poly = np.vstack([pt_up, arc, pt_lo, corner]).astype(np.int32)
+    cv2.fillConvexPoly(mask, poly, 255, lineType=cv2.LINE_AA)
+    return mask.astype(np.float32) / 255.0
+
+
 def _clip_eye_mask_from_nose(
     mask: np.ndarray,
     landmarks,
@@ -538,8 +614,18 @@ def _lid_skin_band_mask(
     """Eyelid skin: band from lid arc outward (distance = mesh spacing, not brow)."""
     if lid_pts.shape[0] < 2:
         return np.zeros((height, width), dtype=np.float32)
-    dist = max(3.0, spacing * (2.8 if upper else 2.1))
-    outer = _offset_polyline_from_center(lid_pts, center, dist)
+    if upper:
+        dist = max(3.0, spacing * 2.8)
+        outer = _offset_polyline_from_center(lid_pts, center, dist)
+        return _fill_band_between_polylines(height, width, lid_pts, outer)
+    # Lower lid: radial + downward so palpebral skin below lash line is fully covered.
+    dist_rad = max(3.0, spacing * 2.5)
+    dist_down = max(5.0, spacing * 3.6)
+    outer_rad = _offset_polyline_from_center(
+        lid_pts, center, dist_rad, inner_taper=2
+    )
+    outer_down = _offset_polyline_downward(lid_pts, dist_down, inner_end_taper=3)
+    outer = np.maximum(outer_rad, outer_down)
     return _fill_band_between_polylines(height, width, lid_pts, outer)
 
 
@@ -653,12 +739,28 @@ def _one_periocular_eye_mask(
             ),
         )
         union = np.maximum(
-            union, _polyline_stroke_mask(height, width, lower_pts, lower_spacing * 1.4)
+            union,
+            _polyline_stroke_mask(height, width, lower_pts, lower_spacing * 1.75),
         )
 
+    if upper_pts.shape[0] >= 2 and lower_pts.shape[0] >= 2:
+        union = np.maximum(
+            union,
+            _outer_canthus_bridge_mask(
+                height,
+                width,
+                upper_pts,
+                lower_pts,
+                center,
+                landmarks,
+                outer,
+                inner,
+                spacing,
+            ),
+        )
     union = np.maximum(
         union,
-        _canthus_pad_mask(landmarks, width, height, outer, spacing * 1.05),
+        _canthus_pad_mask(landmarks, width, height, outer, spacing * 1.15),
     )
     return _clip_eye_mask_from_nose(union, landmarks, width, outer, inner, spacing)
 

@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-simple-face-mask"
 description = "MediaPipe face landmarks + lightweight OpenCV skin retouch for ComfyUI."
-version = "2.3.6"
+version = "2.3.8"
 license = { text = "MIT" }
 dependencies = ["opencv-python-headless>=4.8.0", "mediapipe>=0.10.14"]
 
