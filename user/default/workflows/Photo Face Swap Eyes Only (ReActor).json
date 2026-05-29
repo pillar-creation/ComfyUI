@@ -1,0 +1,649 @@
+{
+  "id": "c3d5e7f9-0123-4567-efab-eyes-only-swap",
+  "revision": 0,
+  "last_node_id": 13,
+  "last_link_id": 13,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [-920, -360],
+      "size": [900, 300],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "仅眼部换脸说明",
+      "properties": {},
+      "widgets_values": [
+        "## 仅替换眼睛区域 (ReActor + 眼蒙版)\n\nReActor **不能**直接只换眼，流程是：\n1. 先整脸换脸 → 2. 用 MediaPipe 眼蒙版 → 3. 只把换脸结果里的**眼睛区域**叠回底图\n\n- **1 待换脸** / **2 人脸参考**：同整脸版\n- **3 ReActor**：内部仍整脸换，后面会裁眼区\n- **4 眼蒙版**：眼裂+沿眼睑法线的眼皮/睫毛带（不连眉弓）\n- **蒙版预览**：绿区=将替换的眼区；灰度图=蒙版本体\n- **5 蒙版合成**：底图 + 换脸图 + 眼蒙版\n\n整脸换脸请用：`Photo Face Swap (ReActor).json`"
+      ],
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [-900, -20],
+      "size": [315, 314],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "image",
+          "type": "COMBO",
+          "widget": { "name": "image" },
+          "link": null
+        },
+        {
+          "localized_name": "选择文件上传",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": { "name": "upload" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [1, 4, 5, 10]
+        },
+        {
+          "localized_name": "遮罩",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "1. 待换脸照片",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [-900, 340],
+      "size": [315, 314],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "image",
+          "type": "COMBO",
+          "widget": { "name": "image" },
+          "link": null
+        },
+        {
+          "localized_name": "选择文件上传",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": { "name": "upload" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [2]
+        },
+        {
+          "localized_name": "遮罩",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "2. 提供的人脸",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 4,
+      "type": "ReActorFaceSwap",
+      "pos": [-480, 80],
+      "size": [315, 380],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "input_image",
+          "name": "input_image",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "localized_name": "source_image",
+          "name": "source_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "localized_name": "face_model",
+          "name": "face_model",
+          "shape": 7,
+          "type": "FACE_MODEL",
+          "link": null
+        },
+        {
+          "localized_name": "face_boost",
+          "name": "face_boost",
+          "shape": 7,
+          "type": "FACE_BOOST",
+          "link": null
+        },
+        {
+          "localized_name": "enabled",
+          "name": "enabled",
+          "type": "BOOLEAN",
+          "widget": { "name": "enabled" },
+          "link": null
+        },
+        {
+          "localized_name": "swap_model",
+          "name": "swap_model",
+          "type": "COMBO",
+          "widget": { "name": "swap_model" },
+          "link": null
+        },
+        {
+          "localized_name": "facedetection",
+          "name": "facedetection",
+          "type": "COMBO",
+          "widget": { "name": "facedetection" },
+          "link": null
+        },
+        {
+          "localized_name": "face_restore_model",
+          "name": "face_restore_model",
+          "type": "COMBO",
+          "widget": { "name": "face_restore_model" },
+          "link": null
+        },
+        {
+          "localized_name": "face_restore_visibility",
+          "name": "face_restore_visibility",
+          "type": "FLOAT",
+          "widget": { "name": "face_restore_visibility" },
+          "link": null
+        },
+        {
+          "localized_name": "codeformer_weight",
+          "name": "codeformer_weight",
+          "type": "FLOAT",
+          "widget": { "name": "codeformer_weight" },
+          "link": null
+        },
+        {
+          "localized_name": "detect_gender_input",
+          "name": "detect_gender_input",
+          "type": "COMBO",
+          "widget": { "name": "detect_gender_input" },
+          "link": null
+        },
+        {
+          "localized_name": "detect_gender_source",
+          "name": "detect_gender_source",
+          "type": "COMBO",
+          "widget": { "name": "detect_gender_source" },
+          "link": null
+        },
+        {
+          "localized_name": "input_faces_index",
+          "name": "input_faces_index",
+          "type": "STRING",
+          "widget": { "name": "input_faces_index" },
+          "link": null
+        },
+        {
+          "localized_name": "source_faces_index",
+          "name": "source_faces_index",
+          "type": "STRING",
+          "widget": { "name": "source_faces_index" },
+          "link": null
+        },
+        {
+          "localized_name": "console_log_level",
+          "name": "console_log_level",
+          "type": "COMBO",
+          "widget": { "name": "console_log_level" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "SWAPPED_IMAGE",
+          "name": "SWAPPED_IMAGE",
+          "type": "IMAGE",
+          "links": [3]
+        },
+        {
+          "localized_name": "FACE_MODEL",
+          "name": "FACE_MODEL",
+          "type": "FACE_MODEL",
+          "links": null
+        },
+        {
+          "localized_name": "ORIGINAL_IMAGE",
+          "name": "ORIGINAL_IMAGE",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "title": "3. ReActor 换脸",
+      "properties": {
+        "Node name for S&R": "ReActorFaceSwap"
+      },
+      "widgets_values": [
+        true,
+        "inswapper_128.onnx",
+        "retinaface_resnet50",
+        "none",
+        1.0,
+        0.5,
+        "no",
+        "no",
+        "0",
+        "0",
+        1
+      ]
+    },
+    {
+      "id": 5,
+      "type": "FaceSkinEyeSize",
+      "pos": [-480, 520],
+      "size": [315, 200],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "localized_name": "eye_size",
+          "name": "eye_size",
+          "type": "FLOAT",
+          "widget": { "name": "eye_size" },
+          "link": null
+        },
+        {
+          "localized_name": "naturalness",
+          "name": "naturalness",
+          "type": "FLOAT",
+          "widget": { "name": "naturalness" },
+          "link": null
+        },
+        {
+          "localized_name": "min_detection_confidence",
+          "name": "min_detection_confidence",
+          "type": "FLOAT",
+          "widget": { "name": "min_detection_confidence" },
+          "link": null
+        },
+        {
+          "localized_name": "min_presence_confidence",
+          "name": "min_presence_confidence",
+          "type": "FLOAT",
+          "widget": { "name": "min_presence_confidence" },
+          "link": null
+        },
+        {
+          "localized_name": "mask_edge_blur",
+          "name": "mask_edge_blur",
+          "type": "INT",
+          "widget": { "name": "mask_edge_blur" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "localized_name": "eye_mask",
+          "name": "eye_mask",
+          "type": "MASK",
+          "links": [6, 11, 12]
+        },
+        {
+          "localized_name": "landmarks_detected",
+          "name": "landmarks_detected",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "debug_preview",
+          "name": "debug_preview",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "title": "4. 眼蒙版 (eye_size=0)",
+      "properties": {
+        "Node name for S&R": "FaceSkinEyeSize"
+      },
+      "widgets_values": [0, 80, 0.5, 0.5, 5]
+    },
+    {
+      "id": 6,
+      "type": "ImageCompositeMasked",
+      "pos": [40, 120],
+      "size": [315, 146],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "目标图像",
+          "name": "destination",
+          "type": "IMAGE",
+          "link": 5
+        },
+        {
+          "localized_name": "源图像",
+          "name": "source",
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "localized_name": "x",
+          "name": "x",
+          "type": "INT",
+          "widget": { "name": "x" },
+          "link": null
+        },
+        {
+          "localized_name": "y",
+          "name": "y",
+          "type": "INT",
+          "widget": { "name": "y" },
+          "link": null
+        },
+        {
+          "localized_name": "缩放源图像",
+          "name": "resize_source",
+          "type": "BOOLEAN",
+          "widget": { "name": "resize_source" },
+          "link": null
+        },
+        {
+          "localized_name": "遮罩",
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [8, 9]
+        }
+      ],
+      "title": "5. 仅眼区合成",
+      "properties": {
+        "Node name for S&R": "ImageCompositeMasked"
+      },
+      "widgets_values": [0, 0, false]
+    },
+    {
+      "id": 10,
+      "type": "FaceSkinEyeMaskPreview",
+      "pos": [-80, 520],
+      "size": [280, 78],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 10
+        },
+        {
+          "localized_name": "eye_mask",
+          "name": "eye_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "overlay",
+          "name": "overlay",
+          "type": "IMAGE",
+          "links": [7]
+        }
+      ],
+      "title": "眼区蒙版叠加",
+      "properties": {
+        "Node name for S&R": "FaceSkinEyeMaskPreview"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 12,
+      "type": "MaskToImage",
+      "pos": [-80, 640],
+      "size": [210, 46],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "遮罩",
+          "name": "mask",
+          "type": "MASK",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [13]
+        }
+      ],
+      "title": "蒙版转图像",
+      "properties": {
+        "Node name for S&R": "MaskToImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 7,
+      "type": "PreviewImage",
+      "pos": [420, -120],
+      "size": [380, 340],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 7
+        }
+      ],
+      "outputs": [],
+      "title": "替换眼区检测预览（绿=替换区）",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 13,
+      "type": "PreviewImage",
+      "pos": [420, 260],
+      "size": [380, 300],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 13
+        }
+      ],
+      "outputs": [],
+      "title": "替换眼区蒙版（灰度）",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 8,
+      "type": "PreviewImage",
+      "pos": [420, 600],
+      "size": [360, 380],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 8
+        }
+      ],
+      "outputs": [],
+      "title": "6. 结果预览",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 9,
+      "type": "SaveImage",
+      "pos": [420, 1020],
+      "size": [360, 270],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图片",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 9
+        },
+        {
+          "localized_name": "文件名前缀",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": { "name": "filename_prefix" },
+          "link": null
+        }
+      ],
+      "outputs": [],
+      "title": "7. 保存",
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": ["ReActor_EyesOnly/ComfyUI"]
+    }
+  ],
+  "links": [
+    [1, 2, 0, 4, 0, "IMAGE"],
+    [2, 3, 0, 4, 1, "IMAGE"],
+    [3, 4, 0, 6, 1, "IMAGE"],
+    [4, 2, 0, 5, 0, "IMAGE"],
+    [5, 2, 0, 6, 0, "IMAGE"],
+    [6, 5, 1, 6, 5, "MASK"],
+    [7, 10, 0, 7, 0, "IMAGE"],
+    [8, 6, 0, 8, 0, "IMAGE"],
+    [9, 6, 0, 9, 0, "IMAGE"],
+    [10, 2, 0, 10, 0, "IMAGE"],
+    [11, 5, 1, 10, 1, "MASK"],
+    [12, 5, 1, 12, 0, "MASK"],
+    [13, 12, 0, 13, 0, "IMAGE"]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "输入",
+      "bounding": [-920, -60, 360, 740],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "换脸 + 眼蒙版",
+      "bounding": [-500, 40, 360, 700],
+      "color": "#8A8",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "蒙版预览",
+      "bounding": [400, -160, 420, 740],
+      "color": "#88A",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "合成与输出",
+      "bounding": [20, 80, 360, 520],
+      "color": "#A88",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "结果",
+      "bounding": [400, 560, 420, 760],
+      "color": "#A88",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "frontendVersion": "1.37.11",
+    "workflowRendererVersion": "LG",
+    "ds": {
+      "scale": 0.85,
+      "offset": [1050, 280]
+    }
+  },
+  "version": 0.4
+}

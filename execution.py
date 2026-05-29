@@ -408,6 +408,15 @@ def format_value(x):
         return None
     elif isinstance(x, (int, float, bool, str)):
         return x
+    elif isinstance(x, torch.Tensor):
+        # Avoid str(tensor): tensor __repr__ summarizes values on GPU and can
+        # raise or mask the real error when CUDA is already in a bad state.
+        try:
+            return "<Tensor shape={} dtype={} device={}>".format(
+                tuple(x.shape), x.dtype, x.device
+            )
+        except Exception:
+            return "<Tensor (metadata unavailable)>"
     else:
         return str(x)
 

@@ -62,7 +62,7 @@
           "link": null
         },
         {
-          "label": "low_noise_unet",
+          "label": "high_noise_unet",
           "name": "unet_name",
           "type": "COMBO",
           "widget": {
@@ -71,7 +71,7 @@
           "link": null
         },
         {
-          "label": "low_noise_lora",
+          "label": "high_noise_lora",
           "name": "lora_name",
           "type": "COMBO",
           "widget": {
@@ -80,7 +80,7 @@
           "link": null
         },
         {
-          "label": "high_noise_unet",
+          "label": "low_noise_unet",
           "name": "unet_name_1",
           "type": "COMBO",
           "widget": {
@@ -89,7 +89,7 @@
           "link": null
         },
         {
-          "label": "high_noise_lora",
+          "label": "low_noise_lora",
           "name": "lora_name_1",
           "type": "COMBO",
           "widget": {
@@ -297,7 +297,7 @@
             "linkIds": [
               226
             ],
-            "label": "low_noise_unet",
+            "label": "high_noise_unet",
             "pos": [
               -138.564453125,
               690
@@ -310,7 +310,7 @@
             "linkIds": [
               227
             ],
-            "label": "low_noise_lora",
+            "label": "high_noise_lora",
             "pos": [
               -138.564453125,
               710
@@ -323,7 +323,7 @@
             "linkIds": [
               228
             ],
-            "label": "high_noise_unet",
+            "label": "low_noise_unet",
             "pos": [
               -138.564453125,
               730
@@ -336,7 +336,7 @@
             "linkIds": [
               229
             ],
-            "label": "high_noise_lora",
+            "label": "low_noise_lora",
             "pos": [
               -138.564453125,
               750

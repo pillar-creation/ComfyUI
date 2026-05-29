@@ -5,21 +5,38 @@ __pycache__/
 !/input/example.png
 /models/
 /temp/
-/custom_nodes/
+/custom_nodes/*
 !custom_nodes/example_node.py.example
+!custom_nodes/websocket_image_save.py
+!custom_nodes/ComfyUI-Simple-Face-Mask/
+!custom_nodes/ComfyUI-Simple-Face-Mask/**
 extra_model_paths.yaml
 /.vs
 .vscode/
 .idea/
 venv*/
 .venv/
+/Lib/
+/Scripts/
+/Include/
+pyvenv.cfg
 /web/extensions/*
 !/web/extensions/logging.js.example
 !/web/extensions/core/
 /tests-ui/data/object_info.json
-/user/
+/user/**
+!user/default/
+!user/default/workflows/
+!user/default/workflows/Photo Face Swap (ReActor).json
+!user/default/workflows/Photo Face Swap (ReActor).md
+!user/default/workflows/Photo Face Swap Eyes Only (ReActor).json
+!user/default/workflows/Video Face Swap (ReActor + RIFE).json
+!user/default/workflows/Video Face Swap (ReActor + RIFE).md
+!user/default/workflows/build_reactor_subgraph_workflow.py
 *.log
 web_custom_versions/
 .DS_Store
 filtered-openapi.yaml
 uv.lock
+download_qwen_2511.err.log
+download_qwen_2511.out.log

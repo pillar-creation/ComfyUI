@@ -1,0 +1,363 @@
+{
+  "id": "b2c4e6f8-9012-3456-abcd-photo-faceswap",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [-920, -320],
+      "size": [880, 260],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "照片换脸说明",
+      "properties": {},
+      "widgets_values": [
+        "## 照片换脸 (ReActor)\n\n1. **待换脸照片**：上传要被替换人脸的底图（可含多人，用下方索引选脸）\n2. **提供的人脸**：上传作为替换来源的参考人脸照片（清晰正脸效果最佳）\n3. **ReActor 换脸**：inswapper_128 + RetinaFace + GFPGAN 修复\n4. **预览 / 保存**：结果在 `output/ReActor_PhotoFaceSwap/` 目录\n\n### 模型安装\n与视频换脸相同，见同目录 `Photo Face Swap (ReActor).md` 或 `Video Face Swap (ReActor + RIFE).md`"
+      ],
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [-900, 0],
+      "size": [315, 314],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "image",
+          "type": "COMBO",
+          "widget": { "name": "image" },
+          "link": null
+        },
+        {
+          "localized_name": "选择文件上传",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": { "name": "upload" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [1]
+        },
+        {
+          "localized_name": "遮罩",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "1. 待换脸照片",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [-900, 360],
+      "size": [315, 314],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "image",
+          "type": "COMBO",
+          "widget": { "name": "image" },
+          "link": null
+        },
+        {
+          "localized_name": "选择文件上传",
+          "name": "upload",
+          "type": "IMAGEUPLOAD",
+          "widget": { "name": "upload" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [2]
+        },
+        {
+          "localized_name": "遮罩",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "2. 提供的人脸",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 4,
+      "type": "ReActorFaceSwap",
+      "pos": [-480, 120],
+      "size": [315, 380],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "input_image",
+          "name": "input_image",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "localized_name": "source_image",
+          "name": "source_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "localized_name": "face_model",
+          "name": "face_model",
+          "shape": 7,
+          "type": "FACE_MODEL",
+          "link": null
+        },
+        {
+          "localized_name": "face_boost",
+          "name": "face_boost",
+          "shape": 7,
+          "type": "FACE_BOOST",
+          "link": null
+        },
+        {
+          "localized_name": "enabled",
+          "name": "enabled",
+          "type": "BOOLEAN",
+          "widget": { "name": "enabled" },
+          "link": null
+        },
+        {
+          "localized_name": "swap_model",
+          "name": "swap_model",
+          "type": "COMBO",
+          "widget": { "name": "swap_model" },
+          "link": null
+        },
+        {
+          "localized_name": "facedetection",
+          "name": "facedetection",
+          "type": "COMBO",
+          "widget": { "name": "facedetection" },
+          "link": null
+        },
+        {
+          "localized_name": "face_restore_model",
+          "name": "face_restore_model",
+          "type": "COMBO",
+          "widget": { "name": "face_restore_model" },
+          "link": null
+        },
+        {
+          "localized_name": "face_restore_visibility",
+          "name": "face_restore_visibility",
+          "type": "FLOAT",
+          "widget": { "name": "face_restore_visibility" },
+          "link": null
+        },
+        {
+          "localized_name": "codeformer_weight",
+          "name": "codeformer_weight",
+          "type": "FLOAT",
+          "widget": { "name": "codeformer_weight" },
+          "link": null
+        },
+        {
+          "localized_name": "detect_gender_input",
+          "name": "detect_gender_input",
+          "type": "COMBO",
+          "widget": { "name": "detect_gender_input" },
+          "link": null
+        },
+        {
+          "localized_name": "detect_gender_source",
+          "name": "detect_gender_source",
+          "type": "COMBO",
+          "widget": { "name": "detect_gender_source" },
+          "link": null
+        },
+        {
+          "localized_name": "input_faces_index",
+          "name": "input_faces_index",
+          "type": "STRING",
+          "widget": { "name": "input_faces_index" },
+          "link": null
+        },
+        {
+          "localized_name": "source_faces_index",
+          "name": "source_faces_index",
+          "type": "STRING",
+          "widget": { "name": "source_faces_index" },
+          "link": null
+        },
+        {
+          "localized_name": "console_log_level",
+          "name": "console_log_level",
+          "type": "COMBO",
+          "widget": { "name": "console_log_level" },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "SWAPPED_IMAGE",
+          "name": "SWAPPED_IMAGE",
+          "type": "IMAGE",
+          "links": [3, 4]
+        },
+        {
+          "localized_name": "FACE_MODEL",
+          "name": "FACE_MODEL",
+          "type": "FACE_MODEL",
+          "links": null
+        },
+        {
+          "localized_name": "ORIGINAL_IMAGE",
+          "name": "ORIGINAL_IMAGE",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "title": "3. ReActor 换脸",
+      "properties": {
+        "Node name for S&R": "ReActorFaceSwap"
+      },
+      "widgets_values": [
+        true,
+        "inswapper_128.onnx",
+        "retinaface_resnet50",
+        "GFPGANv1.3.pth",
+        0.5,
+        0.5,
+        "no",
+        "no",
+        "0",
+        "0",
+        1
+      ]
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "pos": [40, 40],
+      "size": [420, 380],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "title": "4. 预览",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 6,
+      "type": "SaveImage",
+      "pos": [40, 460],
+      "size": [420, 270],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图片",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "localized_name": "文件名前缀",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": { "name": "filename_prefix" },
+          "link": null
+        }
+      ],
+      "outputs": [],
+      "title": "5. 保存",
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": ["ReActor_PhotoFaceSwap/ComfyUI"]
+    }
+  ],
+  "links": [
+    [1, 2, 0, 4, 0, "IMAGE"],
+    [2, 3, 0, 4, 1, "IMAGE"],
+    [3, 4, 0, 5, 0, "IMAGE"],
+    [4, 4, 0, 6, 0, "IMAGE"]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "输入",
+      "bounding": [-920, -40, 360, 740],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "换脸",
+      "bounding": [-500, 80, 360, 460],
+      "color": "#8A8",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "输出",
+      "bounding": [20, 0, 460, 760],
+      "color": "#A88",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "frontendVersion": "1.37.11",
+    "workflowRendererVersion": "LG",
+    "ds": {
+      "scale": 0.9,
+      "offset": [1100, 200]
+    }
+  },
+  "version": 0.4
+}
