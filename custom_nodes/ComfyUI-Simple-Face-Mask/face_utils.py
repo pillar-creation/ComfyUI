@@ -51,6 +51,34 @@ def _indices_from_connections(connections) -> list[int]:
 
 
 def _load_region_index_sets() -> dict[str, list[int]]:
+    _cheeks = {
+        "left_cheek": [50, 101, 36, 205, 187, 123, 116, 147, 213, 192, 214, 204, 203, 142, 126],
+        "right_cheek": [280, 330, 371, 266, 411, 352, 345, 376, 433, 416, 434, 432, 427],
+        "nasolabial_left": [266, 426, 436, 416, 352, 347, 330, 423, 391, 322, 410],
+        "nasolabial_right": [36, 206, 216, 192, 147, 123, 117, 118, 101, 205, 187],
+    }
+    try:
+        from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarksConnections as FLC
+
+        def _conn_idx(conns) -> list[int]:
+            idx: set[int] = set()
+            for c in conns:
+                idx.add(int(c.start))
+                idx.add(int(c.end))
+            return sorted(idx)
+
+        return {
+            "face_oval": _conn_idx(FLC.FACE_LANDMARKS_FACE_OVAL),
+            "left_eye": _conn_idx(FLC.FACE_LANDMARKS_LEFT_EYE),
+            "right_eye": _conn_idx(FLC.FACE_LANDMARKS_RIGHT_EYE),
+            "left_eyebrow": _conn_idx(FLC.FACE_LANDMARKS_LEFT_EYEBROW),
+            "right_eyebrow": _conn_idx(FLC.FACE_LANDMARKS_RIGHT_EYEBROW),
+            "nose": _conn_idx(FLC.FACE_LANDMARKS_NOSE),
+            "lips": _conn_idx(FLC.FACE_LANDMARKS_LIPS),
+            **_cheeks,
+        }
+    except Exception:
+        pass
     try:
         from mediapipe.python.solutions import face_mesh_connections as fmc
 
@@ -58,11 +86,11 @@ def _load_region_index_sets() -> dict[str, list[int]]:
             "face_oval": _indices_from_connections(fmc.FACEMESH_FACE_OVAL),
             "left_eye": _indices_from_connections(fmc.FACEMESH_LEFT_EYE),
             "right_eye": _indices_from_connections(fmc.FACEMESH_RIGHT_EYE),
+            "left_eyebrow": _indices_from_connections(fmc.FACEMESH_LEFT_EYEBROW),
+            "right_eyebrow": _indices_from_connections(fmc.FACEMESH_RIGHT_EYEBROW),
+            "nose": _indices_from_connections(fmc.FACEMESH_NOSE),
             "lips": _indices_from_connections(fmc.FACEMESH_LIPS),
-            "left_cheek": [50, 101, 36, 205, 187, 123, 116, 147, 213, 192, 214, 204, 203, 142, 126],
-            "right_cheek": [280, 330, 371, 266, 411, 352, 345, 376, 433, 416, 434, 432, 427],
-            "nasolabial_left": [266, 426, 436, 416, 352, 347, 330, 423, 391, 322, 410],
-            "nasolabial_right": [36, 206, 216, 192, 147, 123, 117, 118, 101, 205, 187],
+            **_cheeks,
         }
     except Exception:
         return {
@@ -73,11 +101,14 @@ def _load_region_index_sets() -> dict[str, list[int]]:
             ],
             "left_eye": [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7],
             "right_eye": [263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249],
+            "left_eyebrow": [276, 283, 282, 295, 285, 300, 293, 334, 296, 336],
+            "right_eyebrow": [46, 53, 52, 65, 55, 70, 63, 105, 66, 107],
+            "nose": [
+                168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 97, 326, 327, 294, 278,
+                344, 440, 275, 45, 220, 115, 48, 64,
+            ],
             "lips": [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95],
-            "left_cheek": [50, 101, 36, 205, 187, 123, 116, 147, 213, 192, 214, 204, 203, 142, 126],
-            "right_cheek": [280, 330, 371, 266, 411, 352, 345, 376, 433, 416, 434, 432, 427],
-            "nasolabial_left": [266, 426, 436, 416, 352, 347, 330, 423, 391, 322, 410],
-            "nasolabial_right": [36, 206, 216, 192, 147, 123, 117, 118, 101, 205, 187],
+            **_cheeks,
         }
 
 
@@ -964,6 +995,146 @@ def _landmark_oval_skin_mask(
     )
     skin = _subtract_clipped(oval, left_eye, right_eye, lips)
     return _dilate_mask(skin, padding_percent, height, width)
+
+
+def _expand_convex_mask(
+    mask: np.ndarray,
+    height: int,
+    width: int,
+    expand: float,
+) -> np.ndarray:
+    if expand <= 1.001 or mask.max() <= 0:
+        return mask
+    px = max(1, int(min(height, width) * (expand - 1.0) * 0.08))
+    k = px * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    dilated = cv2.dilate((mask * 255).astype(np.uint8), kernel, iterations=1)
+    return dilated.astype(np.float32) / 255.0
+
+
+def _brow_region_mask(
+    landmarks,
+    width: int,
+    height: int,
+    indices: list[int],
+    blur: int,
+    thickness_scale: float = 1.0,
+) -> np.ndarray:
+    pts = _points_for_indices(landmarks, width, height, indices)
+    if pts.shape[0] < 2:
+        return np.zeros((height, width), dtype=np.float32)
+    spacing = _mean_point_spacing(pts)
+    thickness = max(2, int(spacing * 1.35 * thickness_scale))
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.polylines(mask, [pts.astype(np.int32)], False, 255, thickness)
+    if pts.shape[0] >= 3:
+        hull = cv2.convexHull(pts.astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 255)
+    if blur > 0:
+        k = max(3, min(blur | 1, 15))
+        mask = cv2.GaussianBlur(mask, (k, k), 0)
+    return mask.astype(np.float32) / 255.0
+
+
+def _nose_region_mask(
+    landmarks,
+    width: int,
+    height: int,
+    indices: list[int],
+    blur: int,
+    expand: float = 1.12,
+) -> np.ndarray:
+    pts = _points_for_indices(landmarks, width, height, indices)
+    if pts.shape[0] < 3:
+        return np.zeros((height, width), dtype=np.float32)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    hull = cv2.convexHull(pts.astype(np.int32))
+    cv2.fillConvexPoly(mask, hull, 255)
+    out = mask.astype(np.float32) / 255.0
+    out = _expand_convex_mask(out, height, width, expand)
+    if blur > 0:
+        k = max(3, min(blur | 1, 15))
+        out = cv2.GaussianBlur(out, (k, k), 0)
+    return out
+
+
+def _mouth_region_mask(
+    landmarks,
+    width: int,
+    height: int,
+    indices: list[int],
+    blur: int,
+    expand: float = 1.08,
+) -> np.ndarray:
+    pts = _points_for_indices(landmarks, width, height, indices)
+    if pts.shape[0] < 3:
+        return np.zeros((height, width), dtype=np.float32)
+    out = _fill_poly_mask(height, width, pts, blur)
+    return _expand_convex_mask(out, height, width, expand)
+
+
+def build_swap_features_mask(
+    landmarks,
+    height: int,
+    width: int,
+    *,
+    include_eyebrows: bool = True,
+    include_eyes: bool = True,
+    include_nose: bool = True,
+    include_mouth: bool = True,
+    mask_edge_blur: int = 5,
+    brow_thickness: float = 1.0,
+    nose_expand: float = 1.12,
+    mouth_expand: float = 1.08,
+) -> np.ndarray:
+    """Union mask for eyebrows / eyes / nose / mouth (MediaPipe landmarks)."""
+    idx = _REGION_INDEX_SETS
+    union = np.zeros((height, width), dtype=np.float32)
+    blur = int(mask_edge_blur)
+
+    if include_eyes:
+        union = np.maximum(
+            union,
+            build_full_eye_union_mask(landmarks, height, width, blur),
+        )
+    if include_eyebrows:
+        for key in ("left_eyebrow", "right_eyebrow"):
+            union = np.maximum(
+                union,
+                _brow_region_mask(
+                    landmarks, width, height, idx[key], blur, brow_thickness
+                ),
+            )
+    if include_nose:
+        union = np.maximum(
+            union,
+            _nose_region_mask(landmarks, width, height, idx["nose"], blur, nose_expand),
+        )
+    if include_mouth:
+        union = np.maximum(
+            union,
+            _mouth_region_mask(landmarks, width, height, idx["lips"], blur, mouth_expand),
+        )
+    return np.clip(union, 0.0, 1.0)
+
+
+def detect_features_mask_from_bgr(
+    bgr: np.ndarray,
+    *,
+    min_detection_confidence: float = 0.5,
+    min_presence_confidence: float = 0.5,
+    **mask_kwargs,
+) -> tuple[np.ndarray | None, bool]:
+    """Detect landmarks on a BGR crop and build feature union mask."""
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    h, w = bgr.shape[:2]
+    landmarks = detect_face_landmarks(
+        rgb, min_detection_confidence, min_presence_confidence
+    )
+    if landmarks is None:
+        return None, False
+    mask = build_swap_features_mask(landmarks, h, w, **mask_kwargs)
+    return mask, True
 
 
 def detect_face_landmarks(

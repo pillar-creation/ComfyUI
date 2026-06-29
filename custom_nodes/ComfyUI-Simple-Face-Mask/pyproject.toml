@@ -6,6 +6,6 @@ license = { text = "MIT" }
 dependencies = ["opencv-python-headless>=4.8.0", "mediapipe>=0.10.14"]
 
 [tool.comfy]
-PublisherId = "local"
+PublisherId = "comfyui-simple-face-mask"
 DisplayName = "ComfyUI-Simple-Face-Mask"
 Icon = ""

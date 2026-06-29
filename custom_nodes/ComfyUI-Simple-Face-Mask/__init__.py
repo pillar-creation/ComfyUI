@@ -23,17 +23,29 @@ from .skin_nodes import (
     NODE_DISPLAY_NAME_MAPPINGS as STEP_NODE_DISPLAY_NAME_MAPPINGS,
 )
 
+try:
+    from .reactor_decomposed import (
+        NODE_CLASS_MAPPINGS as REACTOR_NODE_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as REACTOR_NODE_DISPLAY_NAME_MAPPINGS,
+    )
+except ImportError as _reactor_import_err:
+    REACTOR_NODE_CLASS_MAPPINGS = {}
+    REACTOR_NODE_DISPLAY_NAME_MAPPINGS = {}
+    print(f"[ComfyUI-Simple-Face-Mask] ReActor split nodes disabled: {_reactor_import_err}")
+
 NODE_CLASS_MAPPINGS = {
     **MASK_NODE_CLASS_MAPPINGS,
     **BEAUTY_NODE_CLASS_MAPPINGS,
     **STEP_NODE_CLASS_MAPPINGS,
+    **REACTOR_NODE_CLASS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **MASK_NODE_DISPLAY_NAME_MAPPINGS,
     **BEAUTY_NODE_DISPLAY_NAME_MAPPINGS,
     **STEP_NODE_DISPLAY_NAME_MAPPINGS,
+    **REACTOR_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
-print("[ComfyUI-Simple-Face-Mask] v2.3.8 — outer canthus arc bridge")
+print("[ComfyUI-Simple-Face-Mask] v2.5.0 — ReActor feature paste (brows/eyes/nose/mouth)")
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

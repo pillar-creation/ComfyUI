@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from .eye_effects import apply_eye_size_from_rgb
+from .face_slim_effects import apply_face_slim_from_rgb
 from .eye_beauty_effects import (
     CommercialEyeParams,
     apply_commercial_eye_beauty_from_rgb,
@@ -83,6 +84,39 @@ EYE_SIZE_INPUT = {
             "max": 100.0,
             "step": 1.0,
             "tooltip": "越高越自然、越柔和；越低越明显（配合 eye_size 100 时建议 30–50）。",
+        },
+    ),
+}
+
+FACE_SLIM_INPUT = {
+    "face_slim": (
+        "FLOAT",
+        {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 100.0,
+            "step": 1.0,
+            "tooltip": "面颊瘦脸（向面部中线收缩）。先试 60–85；仍不明显可提到 90–100 并降低 naturalness。",
+        },
+    ),
+    "jaw_slim": (
+        "FLOAT",
+        {
+            "default": 0.0,
+            "min": 0.0,
+            "max": 100.0,
+            "step": 1.0,
+            "tooltip": "下颌收窄（可选）。建议低于 face_slim，避免下巴过尖。",
+        },
+    ),
+    "naturalness": (
+        "FLOAT",
+        {
+            "default": 80.0,
+            "min": 0.0,
+            "max": 100.0,
+            "step": 1.0,
+            "tooltip": "越高越自然；越低变形越明显。",
         },
     ),
 }
@@ -283,6 +317,85 @@ class FaceSkinEyeSize:
         dbg_t = _tensor_from_bgr(dbg_bgr)
 
         if abs(eye_size) < 1e-6:
+            return (image, mask_t, ok, dbg_t)
+        return (_tensor_from_bgr(out_bgr), mask_t, ok, dbg_t)
+
+
+class FaceSkinFaceSlim:
+    """MediaPipe 检测面颊/下颌 → 向面部中线水平收缩（瘦脸）。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": "要变形的图像（建议接检测节点输出或原图）"}),
+                **FACE_SLIM_INPUT,
+                "min_detection_confidence": (
+                    "FLOAT",
+                    {
+                        "default": 0.5,
+                        "min": 0.1,
+                        "max": 0.9,
+                        "step": 0.05,
+                        "tooltip": "人脸关键点检测阈值。过高易检测失败；建议 0.3–0.5。",
+                    },
+                ),
+                "min_presence_confidence": DETECT_INPUTS["min_presence_confidence"],
+            },
+            "optional": {
+                "detect_image": (
+                    "IMAGE",
+                    {"tooltip": "用于检测脸型的图（建议接原图/上传人像）。不连则用 image。"},
+                ),
+                "mask_edge_blur": ("INT", {"default": 11, "min": 0, "max": 31, "step": 2}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "BOOLEAN", "IMAGE")
+    RETURN_NAMES = ("image", "slim_mask", "landmarks_detected", "debug_preview")
+    FUNCTION = "apply"
+    CATEGORY = "image/beauty"
+
+    def apply(
+        self,
+        image,
+        face_slim,
+        jaw_slim,
+        naturalness,
+        min_detection_confidence,
+        min_presence_confidence,
+        detect_image=None,
+        mask_edge_blur=11,
+    ):
+        _require_batch1(image, "FaceSkinFaceSlim")
+        frame, detect_frame = _resolve_detect_frame(image, detect_image)
+
+        out_bgr, slim_mask, ok = apply_face_slim_from_rgb(
+            frame,
+            face_slim,
+            jaw_slim,
+            min_detection_confidence,
+            min_presence_confidence,
+            mask_edge_blur=int(mask_edge_blur),
+            naturalness=naturalness,
+            detect_rgb_uint8=detect_frame,
+        )
+        mask_t = torch.from_numpy(slim_mask.astype(np.float32)).unsqueeze(0)
+
+        # Debug: show warp result with cheek mask tint (not original+overlay paste)
+        dbg_bgr = out_bgr if (ok and (abs(face_slim) > 1e-6 or abs(jaw_slim) > 1e-6)) else image_to_bgr_uint8(frame)
+        if slim_mask.max() > 0:
+            magenta = np.zeros_like(dbg_bgr)
+            magenta[:, :, 2] = (np.clip(slim_mask, 0, 1) * 160).astype(np.uint8)
+            m3 = (np.clip(slim_mask, 0, 1) * 0.35)[:, :, np.newaxis]
+            dbg_bgr = np.clip(
+                dbg_bgr.astype(np.float32) * (1.0 - m3) + magenta.astype(np.float32) * m3,
+                0,
+                255,
+            ).astype(np.uint8)
+        dbg_t = _tensor_from_bgr(dbg_bgr)
+
+        if abs(face_slim) < 1e-6 and abs(jaw_slim) < 1e-6:
             return (image, mask_t, ok, dbg_t)
         return (_tensor_from_bgr(out_bgr), mask_t, ok, dbg_t)
 
@@ -856,6 +969,7 @@ class FaceSkinMaskSubtract:
 
 NODE_CLASS_MAPPINGS = {
     "FaceSkinDetectMasks": FaceSkinDetectMasks,
+    "FaceSkinFaceSlim": FaceSkinFaceSlim,
     "FaceSkinEyeSize": FaceSkinEyeSize,
     "FaceSkinEyeBeautyPro": FaceSkinEyeBeautyPro,
     "FaceSkinEyeBeautyV2": FaceSkinEyeBeautyPro,
@@ -876,6 +990,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FaceSkinDetectMasks": "1. 检测蒙版 Face Skin Detect",
+    "FaceSkinFaceSlim": "1a. 瘦脸 Face Slim",
     "FaceSkinEyeSize": "1b. 眼睛大小 Eye Size",
     "FaceSkinEyeBeautyPro": "1c. 商业眼美颜 Eye Beauty (Commercial)",
     "FaceSkinEyeBeautyV2": "1c. 商业眼美颜 (alias)",

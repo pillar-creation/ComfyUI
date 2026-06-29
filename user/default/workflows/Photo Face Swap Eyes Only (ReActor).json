@@ -1,8 +1,8 @@
 {
   "id": "c3d5e7f9-0123-4567-efab-eyes-only-swap",
   "revision": 0,
-  "last_node_id": 13,
-  "last_link_id": 13,
+  "last_node_id": 14,
+  "last_link_id": 14,
   "nodes": [
     {
       "id": 1,
@@ -17,7 +17,7 @@
       "title": "仅眼部换脸说明",
       "properties": {},
       "widgets_values": [
-        "## 仅替换眼睛区域 (ReActor + 眼蒙版)\n\nReActor **不能**直接只换眼，流程是：\n1. 先整脸换脸 → 2. 用 MediaPipe 眼蒙版 → 3. 只把换脸结果里的**眼睛区域**叠回底图\n\n- **1 待换脸** / **2 人脸参考**：同整脸版\n- **3 ReActor**：内部仍整脸换，后面会裁眼区\n- **4 眼蒙版**：眼裂+沿眼睑法线的眼皮/睫毛带（不连眉弓）\n- **蒙版预览**：绿区=将替换的眼区；灰度图=蒙版本体\n- **5 蒙版合成**：底图 + 换脸图 + 眼蒙版\n\n整脸换脸请用：`Photo Face Swap (ReActor).json`"
+        "## 仅替换眼睛区域 (ReActor + 眼蒙版)\n\nReActor **不能**直接只换眼，流程是：\n1. 先整脸换脸 → 2. 用 MediaPipe 眼蒙版 → 3. 只把换脸结果里的**眼睛区域**叠回底图\n\n- **1 待换脸** / **2 人脸参考**：同整脸版\n- **3 ReActor**：内部仍整脸换，后面会裁眼区\n- **3b 中间图预览**：ReActor 整脸换脸结果（合成前）\n- **4 眼蒙版**：眼裂+沿眼睑法线的眼皮/睫毛带（不连眉弓）\n- **蒙版预览**：绿区=将替换的眼区；灰度图=蒙版本体\n- **5 蒙版合成**：底图 + 换脸图 + 眼蒙版\n\n整脸换脸请用：`Photo Face Swap (ReActor).json`"
       ],
       "color": "#222",
       "bgcolor": "#000"
@@ -231,7 +231,7 @@
           "localized_name": "SWAPPED_IMAGE",
           "name": "SWAPPED_IMAGE",
           "type": "IMAGE",
-          "links": [3]
+          "links": [3, 14]
         },
         {
           "localized_name": "FACE_MODEL",
@@ -346,6 +346,29 @@
         "Node name for S&R": "FaceSkinEyeSize"
       },
       "widgets_values": [0, 80, 0.5, 0.5, 5]
+    },
+    {
+      "id": 14,
+      "type": "PreviewImage",
+      "pos": [-120, -220],
+      "size": [360, 340],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 14
+        }
+      ],
+      "outputs": [],
+      "title": "3b. 整脸换脸中间图预览",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
     },
     {
       "id": 6,
@@ -592,7 +615,8 @@
     [10, 2, 0, 10, 0, "IMAGE"],
     [11, 5, 1, 10, 1, "MASK"],
     [12, 5, 1, 12, 0, "MASK"],
-    [13, 12, 0, 13, 0, "IMAGE"]
+    [13, 12, 0, 13, 0, "IMAGE"],
+    [14, 4, 0, 14, 0, "IMAGE"]
   ],
   "groups": [
     {
@@ -606,7 +630,7 @@
     {
       "id": 2,
       "title": "换脸 + 眼蒙版",
-      "bounding": [-500, 40, 360, 700],
+      "bounding": [-500, -240, 760, 980],
       "color": "#8A8",
       "font_size": 24,
       "flags": {}

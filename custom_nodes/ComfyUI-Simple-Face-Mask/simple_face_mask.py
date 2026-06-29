@@ -1,5 +1,6 @@
 """Face skin mask (semantic segmentation + landmarks)."""
 
+import numpy as np
 import torch
 
 from .face_utils import detect_masks_from_rgb_frame

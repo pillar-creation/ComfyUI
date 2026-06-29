@@ -19,7 +19,8 @@ pip install -r requirements.txt
 
 ## 节点
 
-- `FaceSkinEyeSize` / `FaceSkinEyeMaskPreview` — 眼周蒙版
+- `FaceSkinFaceSlim` — 瘦脸（面颊 + 可选下颌，MediaPipe 水平收缩）
+- `FaceSkinEyeSize` / `FaceSkinEyeMaskPreview` — 大眼 / 眼周蒙版
 - 美肤、眼部美化等节点见 `skin_nodes.py`、`eye_effects.py`
 
 ## 工作流
