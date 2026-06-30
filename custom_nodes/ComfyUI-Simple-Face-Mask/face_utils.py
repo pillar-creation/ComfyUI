@@ -188,6 +188,19 @@ def get_eye_contour_polygon_order() -> dict[str, list[int]]:
         return {k: list(v) for k, v in _EYE_CONTOUR_ORDER.items()}
 
 
+def get_face_oval_polygon_order() -> list[int]:
+    """Face oval indices in contour order (fillPoly — not convex hull / sorted index)."""
+    try:
+        from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarksConnections as FLC
+
+        order = _order_contour_from_connections(FLC.FACE_LANDMARKS_FACE_OVAL)
+        if len(order) >= 3:
+            return order
+    except Exception:
+        pass
+    return list(_REGION_INDEX_SETS["face_oval"])
+
+
 def get_eye_region_index_sets() -> dict[str, list[int]]:
     """Eye index sets for Face Landmarker task (subject left / right eye)."""
     try:
@@ -1073,6 +1086,181 @@ def _mouth_region_mask(
     return _expand_convex_mask(out, height, width, expand)
 
 
+def _refine_face_oval_points(
+    pts: np.ndarray,
+    landmarks,
+    width: int,
+    height: int,
+    *,
+    forehead_trim: float = 0.0,
+    face_inset: float = 0.0,
+    temple_trim: float = 0.0,
+) -> np.ndarray:
+    """Pull upper oval down toward brows, shrink temples — keeps hair out of face region."""
+    if pts.shape[0] < 3:
+        return pts
+    out = pts.astype(np.float32).copy()
+    center = out.mean(axis=0)
+
+    inset_s = float(np.clip(face_inset, 0.0, 100.0)) / 100.0
+    if inset_s > 0:
+        scale = 1.0 - inset_s * 0.28
+        out = center + (out - center) * scale
+
+    trim_s = float(np.clip(forehead_trim, 0.0, 100.0)) / 100.0
+    temple_s = float(np.clip(temple_trim, 0.0, 100.0)) / 100.0
+    if temple_s <= 0 and trim_s > 0:
+        temple_s = trim_s * 0.85
+
+    idx = _REGION_INDEX_SETS
+    brow_pts = np.vstack(
+        [
+            _points_for_indices(landmarks, width, height, idx["left_eyebrow"]),
+            _points_for_indices(landmarks, width, height, idx["right_eyebrow"]),
+        ]
+    )
+    if brow_pts.shape[0] >= 2:
+        brow_top = float(brow_pts[:, 1].min())
+        brow_spacing = _mean_point_spacing(brow_pts)
+        if trim_s > 0:
+            cap_y = brow_top - brow_spacing * (0.12 + trim_s * 0.22)
+            y_min = float(out[:, 1].min())
+            face_h = max(float(out[:, 1].max()) - y_min, 1.0)
+            for i in range(len(out)):
+                if out[i, 1] < cap_y:
+                    t = trim_s * np.clip((cap_y - out[i, 1]) / (face_h * 0.32), 0.0, 1.0)
+                    out[i, 1] = out[i, 1] * (1.0 - t) + cap_y * t
+                elif out[i, 1] < brow_top + brow_spacing * 0.6:
+                    out[i, 0] = center[0] + (out[i, 0] - center[0]) * (1.0 - trim_s * 0.12)
+
+        if temple_s > 0:
+            outer_rx, _ = _landmark_xy(landmarks, _EYE_CORNERS["right_eye"][0], width, height)
+            outer_lx, _ = _landmark_xy(landmarks, _EYE_CORNERS["left_eye"][0], width, height)
+            margin = brow_spacing * 0.35
+            temple_y_max = brow_top + brow_spacing * 0.95
+            for i in range(len(out)):
+                x, y = out[i, 0], out[i, 1]
+                if y >= temple_y_max:
+                    continue
+                at_right_temple = x < outer_rx - margin
+                at_left_temple = x > outer_lx + margin
+                if not (at_right_temple or at_left_temple):
+                    continue
+                lateral = temple_s * (0.22 + 0.18 * np.clip((temple_y_max - y) / max(temple_y_max, 1.0), 0.0, 1.0))
+                out[i, 0] = center[0] + (x - center[0]) * (1.0 - lateral)
+                if y < brow_top + brow_spacing * 0.25:
+                    out[i, 1] = y + brow_spacing * temple_s * 0.14
+
+    return out
+
+
+def _exclude_hair_from_mask(
+    frame_rgb: np.ndarray,
+    mask: np.ndarray,
+    *,
+    dilate_px: int | None = None,
+) -> np.ndarray:
+    """Subtract semantic hair pixels inside the face region (dilate hair to catch hairline wisps)."""
+    try:
+        import mediapipe as mp
+
+        h, w = frame_rgb.shape[:2]
+        segmenter = _get_segmenter()
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=np.ascontiguousarray(frame_rgb[:, :, :3]),
+        )
+        result = segmenter.segment(mp_image)
+        cats = _category_mask_numpy(result, h, w)
+        hair = (cats == _CAT_HAIR).astype(np.uint8)
+        if hair.max() <= 0:
+            return mask
+        px = dilate_px if dilate_px is not None else max(2, int(min(h, w) * 0.018))
+        k = px * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        hair = cv2.dilate(hair, kernel, iterations=1)
+        return np.clip(mask * (1.0 - hair.astype(np.float32)), 0.0, 1.0)
+    except Exception:
+        return mask
+
+
+def build_face_region_mask(
+    landmarks,
+    height: int,
+    width: int,
+    mask_edge_blur: int = 5,
+    padding_percent: float = 0.0,
+    *,
+    forehead_trim: float = 35.0,
+    face_inset: float = 8.0,
+    temple_trim: float = 38.0,
+    frame_rgb: np.ndarray | None = None,
+    exclude_hair: bool = True,
+) -> np.ndarray:
+    """Filled face-oval region — upper bound for feature masks."""
+    order = get_face_oval_polygon_order()
+    pts = _points_for_indices(landmarks, width, height, order)
+    if pts.shape[0] < 3:
+        return np.zeros((height, width), dtype=np.float32)
+    pts = _refine_face_oval_points(
+        pts,
+        landmarks,
+        width,
+        height,
+        forehead_trim=forehead_trim,
+        face_inset=face_inset,
+        temple_trim=temple_trim,
+    )
+    mask = _fill_poly_mask(height, width, pts, mask_edge_blur)
+    if padding_percent > 0:
+        mask = _dilate_mask(mask, padding_percent, height, width)
+    if exclude_hair and frame_rgb is not None:
+        mask = _exclude_hair_from_mask(frame_rgb, mask)
+    return np.clip(mask, 0.0, 1.0)
+
+
+def face_region_is_valid(
+    face_region: np.ndarray | None,
+    *,
+    min_coverage: float = 0.02,
+) -> bool:
+    """True when a non-trivial face oval was detected."""
+    if face_region is None or face_region.max() <= 0:
+        return False
+    return float(face_region.mean()) >= min_coverage
+
+
+def _clip_mask_to_region(mask: np.ndarray, region: np.ndarray) -> np.ndarray:
+    if region is None or region.max() <= 0:
+        return mask
+    return np.clip(mask * np.clip(region, 0.0, 1.0), 0.0, 1.0)
+
+
+_SWAP_MASK_KWARG_KEYS = frozenset(
+    {
+        "include_eyebrows",
+        "include_eyes",
+        "include_nose",
+        "include_mouth",
+        "mask_edge_blur",
+        "brow_thickness",
+        "nose_expand",
+        "mouth_expand",
+        "clip_to_face",
+        "face_padding_percent",
+        "forehead_trim",
+        "face_inset",
+        "temple_trim",
+        "exclude_hair",
+    }
+)
+
+
+def _swap_mask_kwargs(mask_kwargs: dict) -> dict:
+    """Only pass kwargs accepted by build_swap_features_mask."""
+    return {k: v for k, v in mask_kwargs.items() if k in _SWAP_MASK_KWARG_KEYS}
+
+
 def build_swap_features_mask(
     landmarks,
     height: int,
@@ -1086,6 +1274,14 @@ def build_swap_features_mask(
     brow_thickness: float = 1.0,
     nose_expand: float = 1.12,
     mouth_expand: float = 1.08,
+    clip_to_face: bool = True,
+    face_padding_percent: float = 0.0,
+    forehead_trim: float = 35.0,
+    face_inset: float = 8.0,
+    temple_trim: float = 38.0,
+    exclude_hair: bool = True,
+    frame_rgb: np.ndarray | None = None,
+    face_region: np.ndarray | None = None,
 ) -> np.ndarray:
     """Union mask for eyebrows / eyes / nose / mouth (MediaPipe landmarks)."""
     idx = _REGION_INDEX_SETS
@@ -1115,7 +1311,24 @@ def build_swap_features_mask(
             union,
             _mouth_region_mask(landmarks, width, height, idx["lips"], blur, mouth_expand),
         )
-    return np.clip(union, 0.0, 1.0)
+    union = np.clip(union, 0.0, 1.0)
+    if clip_to_face:
+        region = face_region
+        if region is None:
+            region = build_face_region_mask(
+                landmarks,
+                height,
+                width,
+                blur,
+                face_padding_percent,
+                forehead_trim=forehead_trim,
+                face_inset=face_inset,
+                temple_trim=temple_trim,
+                frame_rgb=frame_rgb,
+                exclude_hair=exclude_hair,
+            )
+        union = _clip_mask_to_region(union, region)
+    return union
 
 
 def detect_features_mask_from_bgr(
@@ -1124,8 +1337,58 @@ def detect_features_mask_from_bgr(
     min_detection_confidence: float = 0.5,
     min_presence_confidence: float = 0.5,
     **mask_kwargs,
+) -> tuple[np.ndarray | None, np.ndarray | None, bool]:
+    """Detect landmarks on a BGR crop; return (feature_mask, face_region_mask, ok)."""
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    h, w = bgr.shape[:2]
+    landmarks = detect_face_landmarks(
+        rgb, min_detection_confidence, min_presence_confidence
+    )
+    if landmarks is None:
+        return None, None, False
+    blur = int(mask_kwargs.get("mask_edge_blur", 5))
+    padding = float(mask_kwargs.get("face_padding_percent", 0.0))
+    forehead_trim = float(mask_kwargs.get("forehead_trim", 35.0))
+    face_inset = float(mask_kwargs.get("face_inset", 8.0))
+    temple_trim = float(mask_kwargs.get("temple_trim", 38.0))
+    exclude_hair = bool(mask_kwargs.get("exclude_hair", True))
+    face_region = build_face_region_mask(
+        landmarks,
+        h,
+        w,
+        blur,
+        padding,
+        forehead_trim=forehead_trim,
+        face_inset=face_inset,
+        temple_trim=temple_trim,
+        frame_rgb=rgb,
+        exclude_hair=exclude_hair,
+    )
+    mask = build_swap_features_mask(
+        landmarks,
+        h,
+        w,
+        face_region=face_region,
+        frame_rgb=rgb,
+        **_swap_mask_kwargs(mask_kwargs),
+    )
+    ok = face_region_is_valid(face_region)
+    return mask, face_region, ok
+
+
+def detect_face_region_mask_from_bgr(
+    bgr: np.ndarray,
+    *,
+    min_detection_confidence: float = 0.5,
+    min_presence_confidence: float = 0.5,
+    mask_edge_blur: int = 5,
+    face_padding_percent: float = 0.0,
+    forehead_trim: float = 35.0,
+    face_inset: float = 8.0,
+    temple_trim: float = 38.0,
+    exclude_hair: bool = True,
 ) -> tuple[np.ndarray | None, bool]:
-    """Detect landmarks on a BGR crop and build feature union mask."""
+    """Detect face oval on a full target image (for paste-back clipping)."""
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     h, w = bgr.shape[:2]
     landmarks = detect_face_landmarks(
@@ -1133,8 +1396,19 @@ def detect_features_mask_from_bgr(
     )
     if landmarks is None:
         return None, False
-    mask = build_swap_features_mask(landmarks, h, w, **mask_kwargs)
-    return mask, True
+    region = build_face_region_mask(
+        landmarks,
+        h,
+        w,
+        int(mask_edge_blur),
+        float(face_padding_percent),
+        forehead_trim=forehead_trim,
+        face_inset=face_inset,
+        temple_trim=temple_trim,
+        frame_rgb=rgb,
+        exclude_hair=exclude_hair,
+    )
+    return region, face_region_is_valid(region)
 
 
 def detect_face_landmarks(

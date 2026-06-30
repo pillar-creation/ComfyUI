@@ -46,6 +46,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **REACTOR_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
-print("[ComfyUI-Simple-Face-Mask] v2.5.0 — ReActor feature paste (brows/eyes/nose/mouth)")
+print("[ComfyUI-Simple-Face-Mask] v2.5.6 — temple trim + hair dilate at hairline")
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

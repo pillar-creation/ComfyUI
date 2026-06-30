@@ -18,6 +18,46 @@ _INTERP = {
     "Lanczos": cv2.INTER_LANCZOS4,
 }
 
+FACE_REGION_INPUT = {
+    "forehead_trim": (
+        "FLOAT",
+        {
+            "default": 35.0,
+            "min": 0.0,
+            "max": 100.0,
+            "step": 1.0,
+            "tooltip": "上收额头轮廓，避免圈到头发。先试 30–50，仍含发可提到 60。",
+        },
+    ),
+    "face_inset": (
+        "FLOAT",
+        {
+            "default": 8.0,
+            "min": 0.0,
+            "max": 50.0,
+            "step": 1.0,
+            "tooltip": "脸轮廓整体向内收缩（百分比）。",
+        },
+    ),
+    "temple_trim": (
+        "FLOAT",
+        {
+            "default": 38.0,
+            "min": 0.0,
+            "max": 100.0,
+            "step": 1.0,
+            "tooltip": "太阳穴/鬓角内收，避免圈到碎发。箭头处仍含发可调到 45–55。",
+        },
+    ),
+    "exclude_hair": (
+        "BOOLEAN",
+        {
+            "default": True,
+            "tooltip": "语义分割扣除头发像素（需 selfie_multiclass 模型）。",
+        },
+    ),
+}
+
 
 @dataclass
 class SwapPasteData:
@@ -101,6 +141,19 @@ def _crop_preview_tensor(bgr_fake: np.ndarray, pad_size: int = 256) -> torch.Ten
     x0 = max(0, (pad_size - w) // 2)
     y1, x1 = min(pad_size, y0 + h), min(pad_size, x0 + w)
     canvas[y0:y1, x0:x1] = bgr_fake[: y1 - y0, : x1 - x0]
+    return _bgr_to_tensor(canvas)
+
+
+def _mask_gray_preview_tensor(mask: np.ndarray, pad_size: int = 256) -> torch.Tensor:
+    """Grayscale mask as RGB IMAGE for PreviewImage (MASK must not go to PreviewImage)."""
+    h, w = mask.shape[:2]
+    gray = (np.clip(mask, 0.0, 1.0) * 255.0).astype(np.uint8)
+    rgb = np.stack([gray, gray, gray], axis=-1)
+    canvas = _checkerboard(pad_size, pad_size)
+    y0 = max(0, (pad_size - h) // 2)
+    x0 = max(0, (pad_size - w) // 2)
+    y1, x1 = min(pad_size, y0 + h), min(pad_size, x0 + w)
+    canvas[y0:y1, x0:x1] = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)[: y1 - y0, : x1 - x0]
     return _bgr_to_tensor(canvas)
 
 
@@ -369,6 +422,49 @@ def _refine_feature_mask(
     return np.clip(out, 0.0, 1.0)
 
 
+def _warp_feature_mask_to_target(
+    crop_mask: np.ndarray,
+    affine_m: np.ndarray,
+    target_w: int,
+    target_h: int,
+    *,
+    mask_dilate_px: int = 2,
+    mask_blur: int = 5,
+    mask_threshold: int = 20,
+) -> np.ndarray:
+    """Warp crop-space feature mask to full target image with paste-back style cleanup."""
+    im = cv2.invertAffineTransform(affine_m)
+    crop_u8 = (np.clip(crop_mask, 0.0, 1.0) * 255.0).astype(np.uint8)
+    warped = cv2.warpAffine(
+        crop_u8,
+        im,
+        (target_w, target_h),
+        borderValue=0,
+        flags=cv2.INTER_LINEAR,
+    ).astype(np.float32)
+
+    if warped.max() <= 0:
+        return np.zeros((target_h, target_w), dtype=np.float32)
+
+    warped[warped > mask_threshold] = 255.0
+    mask_h_inds, mask_w_inds = np.where(warped >= 255.0)
+    if len(mask_h_inds) > 0 and len(mask_w_inds) > 0:
+        mask_h = int(np.max(mask_h_inds) - np.min(mask_h_inds))
+        mask_w = int(np.max(mask_w_inds) - np.min(mask_w_inds))
+        mask_size = max(int(np.sqrt(mask_h * mask_w)), 8)
+
+        if mask_dilate_px > 0:
+            k = mask_dilate_px | 1
+            kernel = np.ones((k, k), np.uint8)
+            warped = cv2.dilate(warped.astype(np.uint8), kernel, iterations=1).astype(np.float32)
+
+        if mask_blur > 0:
+            blur_k = max(mask_size // 10, mask_blur) | 1
+            warped = cv2.GaussianBlur(warped, (blur_k, blur_k), 0)
+
+    return np.clip(warped / 255.0, 0.0, 1.0)
+
+
 def paste_back_features(
     target_bgr: np.ndarray,
     data: SwapPasteData,
@@ -384,12 +480,16 @@ def paste_back_features(
     mask_dilate_px: int = 2,
     mask_blur: int = 5,
     warp_interpolation: str = "Bicubic",
+    forehead_trim: float = 35.0,
+    face_inset: float = 8.0,
+    temple_trim: float = 38.0,
+    exclude_hair: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
     """
     Landmark-based paste-back: only eyebrows / eyes / nose / mouth from swapped crop.
     Falls back to a small center ellipse if landmarks are not detected.
     """
-    from .face_utils import detect_features_mask_from_bgr
+    from .face_utils import detect_face_region_mask_from_bgr, detect_features_mask_from_bgr
 
     bgr_fake = data.bgr_fake
     m = data.affine_m
@@ -397,7 +497,7 @@ def paste_back_features(
     im = cv2.invertAffineTransform(m)
     h, w = target_bgr.shape[:2]
 
-    crop_mask, ok = detect_features_mask_from_bgr(
+    crop_mask, face_region, ok = detect_features_mask_from_bgr(
         bgr_fake,
         min_detection_confidence=min_detection_confidence,
         min_presence_confidence=min_presence_confidence,
@@ -407,18 +507,43 @@ def paste_back_features(
         include_mouth=include_mouth,
         mask_edge_blur=mask_edge_blur,
         brow_thickness=brow_thickness,
+        forehead_trim=forehead_trim,
+        face_inset=face_inset,
+        temple_trim=temple_trim,
+        exclude_hair=exclude_hair,
     )
     if crop_mask is None or crop_mask.max() <= 0:
         crop_h, crop_w = bgr_fake.shape[:2]
-        crop_mask = _crop_core_mask(crop_h, crop_w, width_scale=0.55, height_scale=0.55)
+        crop_mask = _crop_core_mask(crop_h, crop_w, width_scale=0.55, height_scale=0.55) / 255.0
+        face_region = None
         ok = False
 
     crop_mask = _refine_feature_mask(crop_mask, mask_dilate_px=mask_dilate_px, mask_blur=mask_blur)
-    crop_mask_u8 = (crop_mask * 255.0).astype(np.float32)
+    if face_region is not None and face_region.max() > 0:
+        crop_mask = np.clip(crop_mask * face_region, 0.0, 1.0)
 
     bgr_fake_warped = cv2.warpAffine(bgr_fake, im, (w, h), borderValue=0.0, flags=interp)
-    img_mask_warped = cv2.warpAffine(crop_mask_u8, im, (w, h), borderValue=0.0)
-    mask_2d = np.clip(img_mask_warped / 255.0, 0.0, 1.0)
+    mask_2d = _warp_feature_mask_to_target(
+        crop_mask,
+        m,
+        w,
+        h,
+        mask_dilate_px=mask_dilate_px,
+        mask_blur=mask_blur,
+    )
+
+    target_region, _ = detect_face_region_mask_from_bgr(
+        target_bgr,
+        min_detection_confidence=min_detection_confidence,
+        min_presence_confidence=min_presence_confidence,
+        mask_edge_blur=mask_edge_blur,
+        forehead_trim=forehead_trim,
+        face_inset=face_inset,
+        temple_trim=temple_trim,
+        exclude_hair=exclude_hair,
+    )
+    if target_region is not None and target_region.max() > 0:
+        mask_2d = np.clip(mask_2d * target_region, 0.0, 1.0)
 
     merged = mask_2d[..., np.newaxis] * bgr_fake_warped.astype(np.float32) + (
         1.0 - mask_2d[..., np.newaxis]
@@ -697,6 +822,7 @@ class ReActorSwapPasteBackFeatures:
                     "INT",
                     {"default": 5, "min": 0, "max": 31, "step": 2, "tooltip": "贴回前整体蒙版羽化。"},
                 ),
+                **FACE_REGION_INPUT,
             }
         }
 
@@ -726,6 +852,10 @@ class ReActorSwapPasteBackFeatures:
         brow_thickness,
         mask_dilate_px,
         mask_blur,
+        forehead_trim,
+        face_inset,
+        temple_trim,
+        exclude_hair,
     ):
         if target_image.shape[0] != 1:
             raise ValueError("ReActorSwapPasteBackFeatures: batch size must be 1.")
@@ -743,6 +873,10 @@ class ReActorSwapPasteBackFeatures:
             mask_dilate_px=mask_dilate_px,
             mask_blur=mask_blur,
             warp_interpolation=warp_interpolation,
+            forehead_trim=forehead_trim,
+            face_inset=face_inset,
+            temple_trim=temple_trim,
+            exclude_hair=exclude_hair,
         )
         return (
             _bgr_to_tensor(merged),
@@ -774,11 +908,25 @@ class ReActorFeatureMaskPreview:
                 ),
                 "mask_edge_blur": ("INT", {"default": 5, "min": 0, "max": 21, "step": 2}),
                 "brow_thickness": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05}),
+                **FACE_REGION_INPUT,
             }
         }
 
-    RETURN_TYPES = ("MASK", "IMAGE", "BOOLEAN")
-    RETURN_NAMES = ("feature_mask", "overlay_preview", "landmarks_detected")
+    RETURN_TYPES = ("MASK", "IMAGE", "MASK", "IMAGE", "BOOLEAN")
+    RETURN_NAMES = (
+        "feature_mask",
+        "overlay_preview",
+        "face_region_mask",
+        "feature_mask_gray",
+        "landmarks_detected",
+    )
+    OUTPUT_TOOLTIPS = (
+        "五官联合蒙版（MASK，接 MaskPreview 或后续合成）",
+        "绿区=五官、橙线=脸轮廓（接 PreviewImage）",
+        "脸部椭圆区域蒙版（MASK）",
+        "五官蒙版灰度图（IMAGE，专供 PreviewImage 预览）",
+        "是否检测到有效脸部区域",
+    )
     FUNCTION = "run"
     CATEGORY = "image/reactor"
 
@@ -793,12 +941,16 @@ class ReActorFeatureMaskPreview:
         min_presence_confidence,
         mask_edge_blur,
         brow_thickness,
+        forehead_trim,
+        face_inset,
+        temple_trim,
+        exclude_hair,
     ):
         from .face_utils import detect_features_mask_from_bgr
 
         bgr = paste_data.bgr_fake
         h, w = bgr.shape[:2]
-        mask, ok = detect_features_mask_from_bgr(
+        mask, face_region, ok = detect_features_mask_from_bgr(
             bgr,
             min_detection_confidence=min_detection_confidence,
             min_presence_confidence=min_presence_confidence,
@@ -808,16 +960,27 @@ class ReActorFeatureMaskPreview:
             include_mouth=include_mouth,
             mask_edge_blur=mask_edge_blur,
             brow_thickness=brow_thickness,
+            forehead_trim=forehead_trim,
+            face_inset=face_inset,
+            temple_trim=temple_trim,
+            exclude_hair=exclude_hair,
         )
         if mask is None:
             mask = np.zeros((h, w), dtype=np.float32)
+            face_region = np.zeros((h, w), dtype=np.float32)
             ok = False
+        elif face_region is None:
+            face_region = np.zeros((h, w), dtype=np.float32)
 
         overlay = bgr.copy()
         if mask.max() > 0:
             tint = np.zeros_like(overlay)
             tint[:, :, 1] = (np.clip(mask, 0, 1) * 200).astype(np.uint8)
             overlay = cv2.addWeighted(overlay, 0.55, tint, 0.45, 0)
+        if face_region.max() > 0:
+            face_u8 = (np.clip(face_region, 0, 1) * 255).astype(np.uint8)
+            contours, _ = cv2.findContours(face_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, contours, -1, (255, 160, 40), 1, cv2.LINE_AA)
 
         pad = 256
         canvas = _checkerboard(pad, pad)
@@ -829,6 +992,8 @@ class ReActorFeatureMaskPreview:
         return (
             torch.from_numpy(mask.astype(np.float32)).unsqueeze(0),
             _bgr_to_tensor(canvas),
+            torch.from_numpy(face_region.astype(np.float32)).unsqueeze(0),
+            _mask_gray_preview_tensor(mask),
             ok,
         )
 
