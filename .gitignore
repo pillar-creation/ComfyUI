@@ -29,6 +29,8 @@ pyvenv.cfg
 !user/default/workflows/
 !user/default/workflows/Photo Face Swap (ReActor).json
 !user/default/workflows/Photo Face Swap (ReActor).md
+!user/default/workflows/Photo Face Swap (ReActor) - inswapper分步(细).json
+!user/default/workflows/Photo Face Swap + Skin Beauty (Combined).json
 !user/default/workflows/Photo Face Swap Eyes Only (ReActor).json
 !user/default/workflows/Video Face Swap (ReActor + RIFE).json
 !user/default/workflows/Video Face Swap (ReActor + RIFE).md

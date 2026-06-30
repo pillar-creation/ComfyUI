@@ -144,6 +144,27 @@ def _crop_preview_tensor(bgr_fake: np.ndarray, pad_size: int = 256) -> torch.Ten
     return _bgr_to_tensor(canvas)
 
 
+def _mask_tensor_to_2d(
+    mask_t: torch.Tensor,
+    expected_h: int,
+    expected_w: int,
+    name: str,
+) -> np.ndarray:
+    """ComfyUI MASK [B,H,W] → float32 [H,W], resize if needed to match swap crop."""
+    m = mask_t.detach().cpu().numpy().astype(np.float32)
+    if m.ndim == 3:
+        m = m[0]
+    elif m.ndim > 3:
+        m = np.squeeze(m)
+    if m.shape != (expected_h, expected_w):
+        m = cv2.resize(m, (expected_w, expected_h), interpolation=cv2.INTER_LINEAR)
+    if m.shape != (expected_h, expected_w):
+        raise ValueError(
+            f"{name}: mask size {m.shape[1]}x{m.shape[0]} != crop {expected_w}x{expected_h}"
+        )
+    return np.clip(m, 0.0, 1.0)
+
+
 def _mask_gray_preview_tensor(mask: np.ndarray, pad_size: int = 256) -> torch.Tensor:
     """Grayscale mask as RGB IMAGE for PreviewImage (MASK must not go to PreviewImage)."""
     h, w = mask.shape[:2]
@@ -484,10 +505,15 @@ def paste_back_features(
     face_inset: float = 8.0,
     temple_trim: float = 38.0,
     exclude_hair: bool = True,
+    crop_feature_mask: np.ndarray | None = None,
+    crop_face_region_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
     """
     Landmark-based paste-back: only eyebrows / eyes / nose / mouth from swapped crop.
     Falls back to a small center ellipse if landmarks are not detected.
+
+    When crop_feature_mask is supplied (e.g. from ②b), mask-generation kwargs are
+    ignored and only paste-back tuning (dilate/blur/warp) is applied.
     """
     from .face_utils import detect_face_region_mask_from_bgr, detect_features_mask_from_bgr
 
@@ -496,30 +522,44 @@ def paste_back_features(
     interp = _INTERP.get(warp_interpolation, cv2.INTER_CUBIC)
     im = cv2.invertAffineTransform(m)
     h, w = target_bgr.shape[:2]
+    crop_h, crop_w = bgr_fake.shape[:2]
+    use_external_mask = crop_feature_mask is not None
 
-    crop_mask, face_region, ok = detect_features_mask_from_bgr(
-        bgr_fake,
-        min_detection_confidence=min_detection_confidence,
-        min_presence_confidence=min_presence_confidence,
-        include_eyebrows=include_eyebrows,
-        include_eyes=include_eyes,
-        include_nose=include_nose,
-        include_mouth=include_mouth,
-        mask_edge_blur=mask_edge_blur,
-        brow_thickness=brow_thickness,
-        forehead_trim=forehead_trim,
-        face_inset=face_inset,
-        temple_trim=temple_trim,
-        exclude_hair=exclude_hair,
-    )
-    if crop_mask is None or crop_mask.max() <= 0:
-        crop_h, crop_w = bgr_fake.shape[:2]
-        crop_mask = _crop_core_mask(crop_h, crop_w, width_scale=0.55, height_scale=0.55) / 255.0
+    if use_external_mask:
+        crop_mask = np.clip(crop_feature_mask.astype(np.float32), 0.0, 1.0)
+        if crop_mask.shape[:2] != (crop_h, crop_w):
+            crop_mask = cv2.resize(crop_mask, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
+        ok = crop_mask.max() > 0
         face_region = None
-        ok = False
+        if crop_face_region_mask is not None:
+            face_region = np.clip(crop_face_region_mask.astype(np.float32), 0.0, 1.0)
+            if face_region.shape[:2] != (crop_h, crop_w):
+                face_region = cv2.resize(
+                    face_region, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR
+                )
+    else:
+        crop_mask, face_region, ok = detect_features_mask_from_bgr(
+            bgr_fake,
+            min_detection_confidence=min_detection_confidence,
+            min_presence_confidence=min_presence_confidence,
+            include_eyebrows=include_eyebrows,
+            include_eyes=include_eyes,
+            include_nose=include_nose,
+            include_mouth=include_mouth,
+            mask_edge_blur=mask_edge_blur,
+            brow_thickness=brow_thickness,
+            forehead_trim=forehead_trim,
+            face_inset=face_inset,
+            temple_trim=temple_trim,
+            exclude_hair=exclude_hair,
+        )
+        if crop_mask is None or crop_mask.max() <= 0:
+            crop_mask = _crop_core_mask(crop_h, crop_w, width_scale=0.55, height_scale=0.55) / 255.0
+            face_region = None
+            ok = False
 
     crop_mask = _refine_feature_mask(crop_mask, mask_dilate_px=mask_dilate_px, mask_blur=mask_blur)
-    if face_region is not None and face_region.max() > 0:
+    if not use_external_mask and face_region is not None and face_region.max() > 0:
         crop_mask = np.clip(crop_mask * face_region, 0.0, 1.0)
 
     bgr_fake_warped = cv2.warpAffine(bgr_fake, im, (w, h), borderValue=0.0, flags=interp)
@@ -532,16 +572,26 @@ def paste_back_features(
         mask_blur=mask_blur,
     )
 
-    target_region, _ = detect_face_region_mask_from_bgr(
-        target_bgr,
-        min_detection_confidence=min_detection_confidence,
-        min_presence_confidence=min_presence_confidence,
-        mask_edge_blur=mask_edge_blur,
-        forehead_trim=forehead_trim,
-        face_inset=face_inset,
-        temple_trim=temple_trim,
-        exclude_hair=exclude_hair,
-    )
+    if crop_face_region_mask is not None and face_region is not None:
+        target_region = _warp_feature_mask_to_target(
+            face_region,
+            m,
+            w,
+            h,
+            mask_dilate_px=0,
+            mask_blur=max(0, mask_edge_blur),
+        )
+    else:
+        target_region, _ = detect_face_region_mask_from_bgr(
+            target_bgr,
+            min_detection_confidence=min_detection_confidence,
+            min_presence_confidence=min_presence_confidence,
+            mask_edge_blur=mask_edge_blur,
+            forehead_trim=forehead_trim,
+            face_inset=face_inset,
+            temple_trim=temple_trim,
+            exclude_hair=exclude_hair,
+        )
     if target_region is not None and target_region.max() > 0:
         mask_2d = np.clip(mask_2d * target_region, 0.0, 1.0)
 
@@ -758,7 +808,7 @@ class ReActorSwapPasteBack:
 
 
 class ReActorSwapPasteBackFeatures:
-    """Step 4: MediaPipe landmarks → paste only brows / eyes / nose / mouth."""
+    """Step 4: paste swapped features onto target. Tune masks on ②b, wire feature_mask here."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -770,44 +820,6 @@ class ReActorSwapPasteBackFeatures:
                     ["Nearest", "Bilinear", "Bicubic", "Lanczos"],
                     {"default": "Bicubic"},
                 ),
-                "include_eyebrows": ("BOOLEAN", {"default": True}),
-                "include_eyes": ("BOOLEAN", {"default": True}),
-                "include_nose": ("BOOLEAN", {"default": True}),
-                "include_mouth": ("BOOLEAN", {"default": True}),
-                "min_detection_confidence": (
-                    "FLOAT",
-                    {
-                        "default": 0.5,
-                        "min": 0.1,
-                        "max": 0.9,
-                        "step": 0.05,
-                        "tooltip": "MediaPipe 人脸检测阈值。检测失败时回退为小椭圆蒙版。",
-                    },
-                ),
-                "min_presence_confidence": (
-                    "FLOAT",
-                    {"default": 0.5, "min": 0.1, "max": 0.9, "step": 0.05},
-                ),
-                "mask_edge_blur": (
-                    "INT",
-                    {
-                        "default": 5,
-                        "min": 0,
-                        "max": 21,
-                        "step": 2,
-                        "tooltip": "各五官蒙版边缘羽化（在 128px 脸块上）。",
-                    },
-                ),
-                "brow_thickness": (
-                    "FLOAT",
-                    {
-                        "default": 1.0,
-                        "min": 0.5,
-                        "max": 2.0,
-                        "step": 0.05,
-                        "tooltip": "眉毛区域粗细倍率。",
-                    },
-                ),
                 "mask_dilate_px": (
                     "INT",
                     {
@@ -815,15 +827,34 @@ class ReActorSwapPasteBackFeatures:
                         "min": 0,
                         "max": 15,
                         "step": 1,
-                        "tooltip": "蒙版外扩像素，消除贴图边缘缝隙。",
+                        "tooltip": "贴回蒙版外扩像素，消除边缘缝隙。",
                     },
                 ),
                 "mask_blur": (
                     "INT",
-                    {"default": 5, "min": 0, "max": 31, "step": 2, "tooltip": "贴回前整体蒙版羽化。"},
+                    {
+                        "default": 5,
+                        "min": 0,
+                        "max": 31,
+                        "step": 2,
+                        "tooltip": "贴回前整体蒙版羽化。",
+                    },
                 ),
-                **FACE_REGION_INPUT,
-            }
+            },
+            "optional": {
+                "feature_mask": (
+                    "MASK",
+                    {
+                        "tooltip": "接 ②b feature_mask（推荐）。未接时用默认规则在内部生成蒙版。",
+                    },
+                ),
+                "face_region_mask": (
+                    "MASK",
+                    {
+                        "tooltip": "接 ②b face_region_mask（推荐）。全图贴回脸区裁剪与 ②b 一致。",
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "BOOLEAN")
@@ -842,41 +873,30 @@ class ReActorSwapPasteBackFeatures:
         target_image,
         paste_data,
         warp_interpolation,
-        include_eyebrows,
-        include_eyes,
-        include_nose,
-        include_mouth,
-        min_detection_confidence,
-        min_presence_confidence,
-        mask_edge_blur,
-        brow_thickness,
         mask_dilate_px,
         mask_blur,
-        forehead_trim,
-        face_inset,
-        temple_trim,
-        exclude_hair,
+        feature_mask=None,
+        face_region_mask=None,
     ):
         if target_image.shape[0] != 1:
             raise ValueError("ReActorSwapPasteBackFeatures: batch size must be 1.")
+        crop_h, crop_w = paste_data.bgr_fake.shape[:2]
+        crop_feature = None
+        crop_face_region = None
+        if feature_mask is not None:
+            crop_feature = _mask_tensor_to_2d(feature_mask, crop_h, crop_w, "feature_mask")
+        if face_region_mask is not None:
+            crop_face_region = _mask_tensor_to_2d(
+                face_region_mask, crop_h, crop_w, "face_region_mask"
+            )
         merged, mask, warped, ok = paste_back_features(
             _rgb_tensor_to_bgr(target_image),
             paste_data,
-            include_eyebrows=include_eyebrows,
-            include_eyes=include_eyes,
-            include_nose=include_nose,
-            include_mouth=include_mouth,
-            min_detection_confidence=min_detection_confidence,
-            min_presence_confidence=min_presence_confidence,
-            mask_edge_blur=mask_edge_blur,
-            brow_thickness=brow_thickness,
             mask_dilate_px=mask_dilate_px,
             mask_blur=mask_blur,
             warp_interpolation=warp_interpolation,
-            forehead_trim=forehead_trim,
-            face_inset=face_inset,
-            temple_trim=temple_trim,
-            exclude_hair=exclude_hair,
+            crop_feature_mask=crop_feature,
+            crop_face_region_mask=crop_face_region,
         )
         return (
             _bgr_to_tensor(merged),
@@ -921,9 +941,9 @@ class ReActorFeatureMaskPreview:
         "landmarks_detected",
     )
     OUTPUT_TOOLTIPS = (
-        "五官联合蒙版（MASK，接 MaskPreview 或后续合成）",
+        "五官联合蒙版（128px 脸块，接 ③ feature_mask 实现一套参数）",
         "绿区=五官、橙线=脸轮廓（接 PreviewImage）",
-        "脸部椭圆区域蒙版（MASK）",
+        "脸部椭圆区域蒙版（128px，接 ③ face_region_mask）",
         "五官蒙版灰度图（IMAGE，专供 PreviewImage 预览）",
         "是否检测到有效脸部区域",
     )

@@ -1,0 +1,2415 @@
+{
+  "id": "swap-then-beauty-combined",
+  "revision": 0,
+  "last_node_id": 127,
+  "last_link_id": 52,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [
+        -920,
+        -400
+      ],
+      "size": [
+        920,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "inswapper 分步换脸说明",
+      "properties": {
+        "Node name for S&R": "MarkdownNote"
+      },
+      "widgets_values": [
+        "## inswapper_128 细粒度分步（五官贴回）\n\n| 步骤 | 节点 | 说明 |\n|------|------|------|\n| ① | **对齐裁切** | 128 或 256（视模型） |\n| ② | **ONNX 换脸** | 在 swap_model 下拉切换模型 |\n| ②b | **五官蒙版预览** | 绿=五官、橙线=脸轮廓；灰度/脸区预览已接好 |\n| ③ | **五官贴回** | 只把换脸结果里的五官叠回原图（保留原脸型/肤色） |\n\n### 预览（已连线，无需改）\n- **预览 五官蒙版(绿)** ← `overlay_preview`\n- **预览 五官蒙版(灰)** ← `feature_mask_gray`\n- **预览 脸部区域** ← `face_region_mask`\n\n### ③ 节点可调\n- `include_*`：勾选要替换的五官\n- `mask_dilate_px` / `mask_blur`：消除边缘缝隙\n- `min_detection_confidence`：检测失败时回退小椭圆\n\n### 换模型\n| 模型 | 路径 | 说明 |\n|------|------|------|\n| `inswapper_128.onnx` | `models/insightface/` | 默认 |\n| `hyperswap_1a_256.onnx` | `models/hyperswap/` | 256，有时更干净 |\n\n整脸贴回（椭圆蒙版）请用节点 `ReActor ③ 贴回蒙版 (core/cheek)` 替换 ③ 节点。\n\n---\n\n## 串联美颜\n换脸贴回结果 → **检测蒙版** → 瘦脸 → 大眼 → 祛斑 → 磨皮 → … → **保存**\n\n左侧预览③ 为换脸结果；右侧链末端为最终美颜输出。\n\n### 一套参数（推荐）\n②b 的 `feature_mask` → ③ `feature_mask`，`face_region_mask` → ③ `face_region_mask`。\n蒙版只在 **②b** 调；③ 保留 `warp_interpolation` / `mask_dilate_px` / `mask_blur`。"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        -900,
+        -20
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1,
+            8
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "title": "1. 待换脸照片",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        -900,
+        340
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "title": "2. 提供的人脸",
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "ReActorSwapAlign",
+      "pos": [
+        -480,
+        80
+      ],
+      "size": [
+        320,
+        160
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "target_image",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "source_image",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "swap_model",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "swap_model"
+          }
+        },
+        {
+          "name": "input_faces_index",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "input_faces_index"
+          }
+        },
+        {
+          "name": "source_faces_index",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "source_faces_index"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "aligned_crop",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "align_data",
+          "type": "SWAP_ALIGN_DATA",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "title": "① 对齐裁切 128px",
+      "properties": {
+        "Node name for S&R": "ReActorSwapAlign"
+      },
+      "widgets_values": [
+        "inswapper_128.onnx",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "pos": [
+        -120,
+        40
+      ],
+      "size": [
+        260,
+        280
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "title": "预览① 对齐脸块",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 6,
+      "type": "ReActorSwapInfer",
+      "pos": [
+        -480,
+        320
+      ],
+      "size": [
+        320,
+        80
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "align_data",
+          "type": "SWAP_ALIGN_DATA",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "swapped_crop",
+          "type": "IMAGE",
+          "links": [
+            5
+          ]
+        },
+        {
+          "name": "paste_data",
+          "type": "SWAP_PASTE_DATA",
+          "links": [
+            6,
+            14
+          ]
+        }
+      ],
+      "title": "② ONNX 换脸 (emap+128)",
+      "properties": {
+        "Node name for S&R": "ReActorSwapInfer"
+      }
+    },
+    {
+      "id": 7,
+      "type": "PreviewImage",
+      "pos": [
+        -120,
+        300
+      ],
+      "size": [
+        260,
+        280
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [],
+      "title": "预览② 换脸脸块",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 14,
+      "type": "ReActorFeatureMaskPreview",
+      "pos": [
+        -120,
+        560
+      ],
+      "size": [
+        320,
+        220
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "paste_data",
+          "type": "SWAP_PASTE_DATA",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "feature_mask",
+          "type": "MASK",
+          "links": [
+            51
+          ]
+        },
+        {
+          "name": "overlay_preview",
+          "type": "IMAGE",
+          "links": [
+            15
+          ]
+        },
+        {
+          "name": "face_region_mask",
+          "type": "MASK",
+          "links": [
+            18,
+            52
+          ]
+        },
+        {
+          "name": "feature_mask_gray",
+          "type": "IMAGE",
+          "links": [
+            17
+          ]
+        },
+        {
+          "name": "landmarks_detected",
+          "type": "BOOLEAN",
+          "links": []
+        }
+      ],
+      "title": "②b 五官蒙版预览",
+      "properties": {
+        "Node name for S&R": "ReActorFeatureMaskPreview"
+      },
+      "widgets_values": [
+        true,
+        true,
+        true,
+        true,
+        0.5,
+        0.5,
+        5,
+        1.0,
+        35,
+        8,
+        38,
+        true
+      ]
+    },
+    {
+      "id": 15,
+      "type": "PreviewImage",
+      "pos": [
+        180,
+        560
+      ],
+      "size": [
+        260,
+        280
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 15
+        }
+      ],
+      "outputs": [],
+      "title": "预览 五官蒙版(绿)",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 17,
+      "type": "PreviewImage",
+      "pos": [
+        180,
+        880
+      ],
+      "size": [
+        260,
+        280
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 17
+        }
+      ],
+      "outputs": [],
+      "title": "预览 五官蒙版(灰)",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 18,
+      "type": "MaskPreview",
+      "pos": [
+        460,
+        880
+      ],
+      "size": [
+        260,
+        280
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 18
+        }
+      ],
+      "outputs": [],
+      "title": "预览 脸部区域",
+      "properties": {
+        "Node name for S&R": "MaskPreview",
+        "cnr_id": "comfy-core"
+      }
+    },
+    {
+      "id": 8,
+      "type": "ReActorSwapPasteBackFeatures",
+      "pos": [
+        -480,
+        480
+      ],
+      "size": [
+        320,
+        200
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "target_image",
+          "type": "IMAGE",
+          "link": 8
+        },
+        {
+          "name": "paste_data",
+          "type": "SWAP_PASTE_DATA",
+          "link": 6
+        },
+        {
+          "name": "warp_interpolation",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "warp_interpolation"
+          }
+        },
+        {
+          "name": "mask_dilate_px",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "mask_dilate_px"
+          }
+        },
+        {
+          "name": "mask_blur",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "mask_blur"
+          }
+        },
+        {
+          "name": "feature_mask",
+          "type": "MASK",
+          "link": 51
+        },
+        {
+          "name": "face_region_mask",
+          "type": "MASK",
+          "link": 52
+        }
+      ],
+      "outputs": [
+        {
+          "name": "swapped_image",
+          "type": "IMAGE",
+          "links": [
+            7,
+            47,
+            48,
+            49,
+            50
+          ]
+        },
+        {
+          "name": "paste_mask",
+          "type": "MASK",
+          "links": [
+            11
+          ]
+        },
+        {
+          "name": "warped_layer",
+          "type": "IMAGE",
+          "links": [
+            12
+          ]
+        }
+      ],
+      "title": "③ 五官贴回 (蒙版来自②b)",
+      "properties": {
+        "Node name for S&R": "ReActorSwapPasteBackFeatures"
+      },
+      "widgets_values": [
+        "Bicubic",
+        2,
+        5
+      ]
+    },
+    {
+      "id": 9,
+      "type": "PreviewImage",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        420,
+        380
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 7
+        }
+      ],
+      "outputs": [],
+      "title": "预览③ 贴回结果",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 10,
+      "type": "SaveImage",
+      "pos": [
+        40,
+        500
+      ],
+      "size": [
+        420,
+        270
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "title": "4. 保存（仅换脸，未连线）",
+      "properties": {
+        "Node name for S&R": "SaveImage",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": [
+        "ReActor_PhotoFaceSwap/inswapper_steps"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "PreviewImage",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        280,
+        280
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        }
+      ],
+      "outputs": [],
+      "title": "预览 仿射层(未混合)",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 12,
+      "type": "MaskToImage",
+      "pos": [
+        500,
+        400
+      ],
+      "size": [
+        200,
+        46
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "title": "贴回蒙版→图",
+      "properties": {
+        "Node name for S&R": "MaskToImage",
+        "cnr_id": "comfy-core"
+      }
+    },
+    {
+      "id": 13,
+      "type": "PreviewImage",
+      "pos": [
+        500,
+        480
+      ],
+      "size": [
+        280,
+        240
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 13
+        }
+      ],
+      "outputs": [],
+      "title": "预览 贴回蒙版",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    },
+    {
+      "id": 114,
+      "type": "MarkdownNote",
+      "pos": [
+        880,
+        -320
+      ],
+      "size": [
+        900,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "说明",
+      "properties": {},
+      "widgets_values": [
+        "## 换脸后美颜（接在 inswapper 分步换脸之后）\\n\\n**输入**：来自左侧 **③ 五官贴回** 的 swapped_image。\\n\\n**几何**：检测 → **瘦脸** → 大眼 → 祛斑 → 磨皮 → … → 清晰\\n\\n**detect_image**：已接换脸结果，与当前处理图一致。"
+      ],
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 111,
+      "type": "PreviewImage",
+      "pos": [
+        3050,
+        40
+      ],
+      "size": [
+        360,
+        300
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 30
+        }
+      ],
+      "outputs": [],
+      "title": "预览",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 107,
+      "type": "FaceSkinDarkCircle",
+      "pos": [
+        2180,
+        -80
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 23
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 24
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            25
+          ]
+        }
+      ],
+      "title": "6. 祛黑眼圈",
+      "properties": {
+        "Node name for S&R": "FaceSkinDarkCircle"
+      },
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "id": 108,
+      "type": "FaceSkinPlump",
+      "pos": [
+        2470,
+        -80
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 25
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 26
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            28
+          ]
+        }
+      ],
+      "title": "7. 丰盈",
+      "properties": {
+        "Node name for S&R": "FaceSkinPlump"
+      },
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "id": 106,
+      "type": "FaceSkinNasolabial",
+      "pos": [
+        1890,
+        -80
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 33
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 22
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            23
+          ]
+        }
+      ],
+      "title": "5. 祛法令纹",
+      "properties": {
+        "Node name for S&R": "FaceSkinNasolabial"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 109,
+      "type": "FaceSkinWhiten",
+      "pos": [
+        2760,
+        -80
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 28
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 27
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            34
+          ]
+        }
+      ],
+      "title": "8. 美白",
+      "properties": {
+        "Node name for S&R": "FaceSkinWhiten"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 110,
+      "type": "FaceSkinClarity",
+      "pos": [
+        3050,
+        -80
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 35
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 29
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            30,
+            31
+          ]
+        }
+      ],
+      "title": "9. 清晰",
+      "properties": {
+        "Node name for S&R": "FaceSkinClarity"
+      },
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "id": 118,
+      "type": "FaceSkinEvenTone",
+      "pos": [
+        2725.0634921631918,
+        -262.16923964491406
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 34
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 32
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            35
+          ]
+        }
+      ],
+      "title": "4. 匀肤",
+      "properties": {
+        "Node name for S&R": "FaceSkinEvenTone"
+      },
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "id": 119,
+      "type": "FaceSkinMaskCheckPreview",
+      "pos": [
+        660,
+        200
+      ],
+      "size": [
+        320,
+        326
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 48
+        },
+        {
+          "localized_name": "face_mask",
+          "name": "face_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 36
+        },
+        {
+          "localized_name": "under_eye_mask",
+          "name": "under_eye_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 37
+        },
+        {
+          "localized_name": "nasolabial_mask",
+          "name": "nasolabial_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 38
+        },
+        {
+          "localized_name": "cheek_mask",
+          "name": "cheek_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 39
+        },
+        {
+          "localized_name": "overlay_alpha",
+          "name": "overlay_alpha",
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_alpha"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "show_legend",
+          "name": "show_legend",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "show_legend"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "skin_mask_mode",
+          "name": "skin_mask_mode",
+          "shape": 7,
+          "type": "COMBO",
+          "widget": {
+            "name": "skin_mask_mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "padding_percent",
+          "name": "padding_percent",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "padding_percent"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mask_edge_blur",
+          "name": "mask_edge_blur",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "mask_edge_blur"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_detection_confidence",
+          "name": "min_detection_confidence",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_detection_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_presence_confidence",
+          "name": "min_presence_confidence",
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_presence_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fallback_center_if_no_face",
+          "name": "fallback_center_if_no_face",
+          "shape": 7,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "fallback_center_if_no_face"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "overlay_preview",
+          "name": "overlay_preview",
+          "type": "IMAGE",
+          "links": [
+            41
+          ]
+        },
+        {
+          "localized_name": "face_mask",
+          "name": "face_mask",
+          "type": "MASK",
+          "links": [
+            40
+          ]
+        },
+        {
+          "localized_name": "under_eye_mask",
+          "name": "under_eye_mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "localized_name": "nasolabial_mask",
+          "name": "nasolabial_mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "localized_name": "cheek_mask",
+          "name": "cheek_mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "localized_name": "union_mask",
+          "name": "union_mask",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "蒙版检查",
+      "properties": {
+        "Node name for S&R": "FaceSkinMaskCheckPreview"
+      },
+      "widgets_values": [
+        0.55,
+        true,
+        "semantic",
+        0.06,
+        15,
+        0.5,
+        0.5,
+        false
+      ]
+    },
+    {
+      "id": 121,
+      "type": "MaskPreview",
+      "pos": [
+        1040,
+        540
+      ],
+      "size": [
+        380,
+        300
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "遮罩",
+          "name": "mask",
+          "type": "MASK",
+          "link": 40
+        }
+      ],
+      "outputs": [],
+      "title": "脸蒙版灰度",
+      "properties": {
+        "Node name for S&R": "MaskPreview"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 120,
+      "type": "PreviewImage",
+      "pos": [
+        985.7176661657666,
+        140.81578590397856
+      ],
+      "size": [
+        380,
+        340
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 41
+        }
+      ],
+      "outputs": [],
+      "title": "蒙版彩色叠加",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 104,
+      "type": "FaceSkinSmooth",
+      "pos": [
+        1596.73085777914,
+        -83.14468986707674
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 20
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 21
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            33
+          ]
+        }
+      ],
+      "title": "3. 磨皮",
+      "properties": {
+        "Node name for S&R": "FaceSkinSmooth"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 103,
+      "type": "FaceSkinSpotRemove",
+      "pos": [
+        1312.9811959988392,
+        -76.63236559211079
+      ],
+      "size": [
+        260,
+        78
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 43
+        },
+        {
+          "localized_name": "mask",
+          "name": "mask",
+          "type": "MASK",
+          "link": 19
+        },
+        {
+          "localized_name": "amount",
+          "name": "amount",
+          "type": "FLOAT",
+          "widget": {
+            "name": "amount"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "图像",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "title": "2. 祛斑祛痘",
+      "properties": {
+        "Node name for S&R": "FaceSkinSpotRemove"
+      },
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "id": 102,
+      "type": "FaceSkinDetectMasks",
+      "pos": [
+        660,
+        -80
+      ],
+      "size": [
+        320,
+        282
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "localized_name": "restrict_mask",
+          "name": "restrict_mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "localized_name": "skin_mask_mode",
+          "name": "skin_mask_mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "skin_mask_mode"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "padding_percent",
+          "name": "padding_percent",
+          "type": "FLOAT",
+          "widget": {
+            "name": "padding_percent"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mask_edge_blur",
+          "name": "mask_edge_blur",
+          "type": "INT",
+          "widget": {
+            "name": "mask_edge_blur"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_detection_confidence",
+          "name": "min_detection_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_detection_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_presence_confidence",
+          "name": "min_presence_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_presence_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "fallback_center_if_no_face",
+          "name": "fallback_center_if_no_face",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "fallback_center_if_no_face"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            42
+          ]
+        },
+        {
+          "localized_name": "face_mask",
+          "name": "face_mask",
+          "type": "MASK",
+          "links": [
+            19,
+            21,
+            10,
+            27,
+            29,
+            32,
+            36,
+            40
+          ]
+        },
+        {
+          "localized_name": "under_eye_mask",
+          "name": "under_eye_mask",
+          "type": "MASK",
+          "links": [
+            24,
+            37
+          ]
+        },
+        {
+          "localized_name": "nasolabial_mask",
+          "name": "nasolabial_mask",
+          "type": "MASK",
+          "links": [
+            22,
+            38
+          ]
+        },
+        {
+          "localized_name": "cheek_mask",
+          "name": "cheek_mask",
+          "type": "MASK",
+          "links": [
+            26,
+            39
+          ]
+        }
+      ],
+      "title": "1. 检测蒙版",
+      "properties": {
+        "Node name for S&R": "FaceSkinDetectMasks"
+      },
+      "widgets_values": [
+        "semantic",
+        0.06,
+        15,
+        0.5,
+        0.5,
+        false
+      ]
+    },
+    {
+      "id": 125,
+      "type": "PreviewImage",
+      "pos": [
+        2118.346886617403,
+        -358.51804111881535
+      ],
+      "size": [
+        140,
+        246
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 44
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 112,
+      "type": "SaveImage",
+      "pos": [
+        3069.230056792898,
+        388.0831836362525
+      ],
+      "size": [
+        360,
+        270
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图片",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 31
+        },
+        {
+          "localized_name": "文件名前缀",
+          "name": "filename_prefix",
+          "type": "STRING",
+          "widget": {
+            "name": "filename_prefix"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [],
+      "title": "10. 保存（换脸+美颜）",
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "ReActor_PhotoFaceSwap/face_skin_after_swap"
+      ]
+    },
+    {
+      "id": 124,
+      "type": "FaceSkinEyeSize",
+      "pos": [
+        2980,
+        106.2438499829051
+      ],
+      "size": [
+        312.564453125,
+        214
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 45
+        },
+        {
+          "localized_name": "detect_image",
+          "name": "detect_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 50
+        },
+        {
+          "localized_name": "eye_size",
+          "name": "eye_size",
+          "type": "FLOAT",
+          "widget": {
+            "name": "eye_size"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "naturalness",
+          "name": "naturalness",
+          "type": "FLOAT",
+          "widget": {
+            "name": "naturalness"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_detection_confidence",
+          "name": "min_detection_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_detection_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_presence_confidence",
+          "name": "min_presence_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_presence_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mask_edge_blur",
+          "name": "mask_edge_blur",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "mask_edge_blur"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            43
+          ]
+        },
+        {
+          "localized_name": "eye_mask",
+          "name": "eye_mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "localized_name": "landmarks_detected",
+          "name": "landmarks_detected",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "debug_preview",
+          "name": "debug_preview",
+          "type": "IMAGE",
+          "links": [
+            44
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FaceSkinEyeSize"
+      },
+      "widgets_values": [
+        40,
+        20,
+        0.35,
+        0.5,
+        9
+      ]
+    },
+    {
+      "id": 127,
+      "type": "PreviewImage",
+      "pos": [
+        2420,
+        -300
+      ],
+      "size": [
+        200,
+        260
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "图像",
+          "name": "images",
+          "type": "IMAGE",
+          "link": 46
+        }
+      ],
+      "outputs": [],
+      "title": "瘦脸蒙版",
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 126,
+      "type": "FaceSkinFaceSlim",
+      "pos": [
+        2301.160632959603,
+        293.8428242533048
+      ],
+      "size": [
+        312,
+        238
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "link": 42
+        },
+        {
+          "localized_name": "detect_image",
+          "name": "detect_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 49
+        },
+        {
+          "localized_name": "face_slim",
+          "name": "face_slim",
+          "type": "FLOAT",
+          "widget": {
+            "name": "face_slim"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "jaw_slim",
+          "name": "jaw_slim",
+          "type": "FLOAT",
+          "widget": {
+            "name": "jaw_slim"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "naturalness",
+          "name": "naturalness",
+          "type": "FLOAT",
+          "widget": {
+            "name": "naturalness"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_detection_confidence",
+          "name": "min_detection_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_detection_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "min_presence_confidence",
+          "name": "min_presence_confidence",
+          "type": "FLOAT",
+          "widget": {
+            "name": "min_presence_confidence"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "mask_edge_blur",
+          "name": "mask_edge_blur",
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "mask_edge_blur"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "image",
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            45
+          ]
+        },
+        {
+          "localized_name": "slim_mask",
+          "name": "slim_mask",
+          "type": "MASK",
+          "links": null
+        },
+        {
+          "localized_name": "landmarks_detected",
+          "name": "landmarks_detected",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "localized_name": "debug_preview",
+          "name": "debug_preview",
+          "type": "IMAGE",
+          "links": [
+            46
+          ]
+        }
+      ],
+      "title": "1a. 瘦脸",
+      "properties": {
+        "Node name for S&R": "FaceSkinFaceSlim"
+      },
+      "widgets_values": [
+        0,
+        40,
+        45,
+        0.35,
+        0.5,
+        11
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      3,
+      0,
+      4,
+      1,
+      "IMAGE"
+    ],
+    [
+      3,
+      4,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      4,
+      1,
+      6,
+      0,
+      "SWAP_ALIGN_DATA"
+    ],
+    [
+      5,
+      6,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      6,
+      1,
+      8,
+      1,
+      "SWAP_PASTE_DATA"
+    ],
+    [
+      14,
+      6,
+      1,
+      14,
+      0,
+      "SWAP_PASTE_DATA"
+    ],
+    [
+      15,
+      14,
+      1,
+      15,
+      0,
+      "IMAGE"
+    ],
+    [
+      7,
+      8,
+      0,
+      9,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      2,
+      0,
+      8,
+      0,
+      "IMAGE"
+    ],
+    [
+      11,
+      8,
+      1,
+      12,
+      0,
+      "MASK"
+    ],
+    [
+      12,
+      8,
+      2,
+      11,
+      0,
+      "IMAGE"
+    ],
+    [
+      13,
+      12,
+      0,
+      13,
+      0,
+      "IMAGE"
+    ],
+    [
+      17,
+      14,
+      3,
+      17,
+      0,
+      "IMAGE"
+    ],
+    [
+      18,
+      14,
+      2,
+      18,
+      0,
+      "MASK"
+    ],
+    [
+      19,
+      102,
+      1,
+      103,
+      1,
+      "MASK"
+    ],
+    [
+      20,
+      103,
+      0,
+      104,
+      0,
+      "IMAGE"
+    ],
+    [
+      21,
+      102,
+      1,
+      104,
+      1,
+      "MASK"
+    ],
+    [
+      22,
+      102,
+      3,
+      106,
+      1,
+      "MASK"
+    ],
+    [
+      23,
+      106,
+      0,
+      107,
+      0,
+      "IMAGE"
+    ],
+    [
+      24,
+      102,
+      2,
+      107,
+      1,
+      "MASK"
+    ],
+    [
+      25,
+      107,
+      0,
+      108,
+      0,
+      "IMAGE"
+    ],
+    [
+      26,
+      102,
+      4,
+      108,
+      1,
+      "MASK"
+    ],
+    [
+      27,
+      102,
+      1,
+      109,
+      1,
+      "MASK"
+    ],
+    [
+      28,
+      108,
+      0,
+      109,
+      0,
+      "IMAGE"
+    ],
+    [
+      29,
+      102,
+      1,
+      110,
+      1,
+      "MASK"
+    ],
+    [
+      30,
+      110,
+      0,
+      111,
+      0,
+      "IMAGE"
+    ],
+    [
+      31,
+      110,
+      0,
+      112,
+      0,
+      "IMAGE"
+    ],
+    [
+      32,
+      102,
+      1,
+      118,
+      1,
+      "MASK"
+    ],
+    [
+      33,
+      104,
+      0,
+      106,
+      0,
+      "IMAGE"
+    ],
+    [
+      34,
+      109,
+      0,
+      118,
+      0,
+      "IMAGE"
+    ],
+    [
+      35,
+      118,
+      0,
+      110,
+      0,
+      "IMAGE"
+    ],
+    [
+      36,
+      102,
+      1,
+      119,
+      1,
+      "MASK"
+    ],
+    [
+      37,
+      102,
+      2,
+      119,
+      2,
+      "MASK"
+    ],
+    [
+      38,
+      102,
+      3,
+      119,
+      3,
+      "MASK"
+    ],
+    [
+      39,
+      102,
+      4,
+      119,
+      4,
+      "MASK"
+    ],
+    [
+      40,
+      119,
+      1,
+      121,
+      0,
+      "MASK"
+    ],
+    [
+      41,
+      119,
+      0,
+      120,
+      0,
+      "IMAGE"
+    ],
+    [
+      42,
+      102,
+      0,
+      126,
+      0,
+      "IMAGE"
+    ],
+    [
+      43,
+      124,
+      0,
+      103,
+      0,
+      "IMAGE"
+    ],
+    [
+      44,
+      124,
+      3,
+      125,
+      0,
+      "IMAGE"
+    ],
+    [
+      45,
+      126,
+      0,
+      124,
+      0,
+      "IMAGE"
+    ],
+    [
+      46,
+      126,
+      3,
+      127,
+      0,
+      "IMAGE"
+    ],
+    [
+      47,
+      8,
+      0,
+      102,
+      0,
+      "IMAGE"
+    ],
+    [
+      48,
+      8,
+      0,
+      119,
+      0,
+      "IMAGE"
+    ],
+    [
+      49,
+      8,
+      0,
+      126,
+      1,
+      "IMAGE"
+    ],
+    [
+      50,
+      8,
+      0,
+      124,
+      1,
+      "IMAGE"
+    ],
+    [
+      51,
+      14,
+      0,
+      8,
+      5,
+      "MASK"
+    ],
+    [
+      52,
+      14,
+      2,
+      8,
+      6,
+      "MASK"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "输入",
+      "bounding": [
+        -920,
+        -50,
+        360,
+        740
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "① 对齐裁切",
+      "bounding": [
+        -500,
+        20,
+        660,
+        320
+      ],
+      "color": "#8A8",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "② ONNX 推理 + 五官蒙版",
+      "bounding": [
+        -500,
+        280,
+        960,
+        940
+      ],
+      "color": "#A88",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "③ 五官贴回 + 预览",
+      "bounding": [
+        -500,
+        440,
+        1320,
+        380
+      ],
+      "color": "#88A",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 11,
+      "title": "④ 美颜检测与蒙版",
+      "bounding": [
+        620,
+        -120,
+        820,
+        980
+      ],
+      "color": "#3f789e",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 12,
+      "title": "④ 换脸后美颜链",
+      "bounding": [
+        1000,
+        -120,
+        2020,
+        280
+      ],
+      "color": "#3f789e",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 20,
+      "title": "换脸 → 美颜",
+      "bounding": [
+        40,
+        60,
+        3200,
+        1200
+      ],
+      "color": "#b58",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "frontendVersion": "1.37.11",
+    "workflowRendererVersion": "LG",
+    "ds": {
+      "scale": 0.55,
+      "offset": [
+        400,
+        200
+      ]
+    }
+  },
+  "version": 0.4
+}
