@@ -1,5 +1,8 @@
 """ComfyUI-Simple-Face-Mask: MediaPipe landmarks + skin beauty nodes."""
 
+import os
+import threading
+
 try:
     import cv2  # noqa: F401
     import mediapipe  # noqa: F401
@@ -47,5 +50,37 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 }
 
 print("[ComfyUI-Simple-Face-Mask] v2.5.6 — temple trim + hair dilate at hairline")
+
+
+def _start_mediapipe_preload() -> None:
+    skip = os.environ.get("COMFYUI_FACE_MASK_SKIP_MEDIAPIPE_PRELOAD", "").lower()
+    if skip in ("1", "true", "yes"):
+        return
+
+    def _run() -> None:
+        try:
+            from .face_utils import preload_mediapipe
+
+            preload_mediapipe()
+        except Exception as exc:
+            print(
+                "[ComfyUI-Simple-Face-Mask] MediaPipe preload failed "
+                f"(will retry on first use): {exc}"
+            )
+
+    sync = os.environ.get("COMFYUI_FACE_MASK_SYNC_MEDIAPIPE_PRELOAD", "").lower()
+    if sync in ("1", "true", "yes"):
+        _run()
+        return
+
+    threading.Thread(
+        target=_run,
+        name="ComfyUI-Simple-Face-Mask-mediapipe-preload",
+        daemon=True,
+    ).start()
+    print("[ComfyUI-Simple-Face-Mask] MediaPipe preload started (background)")
+
+
+_start_mediapipe_preload()
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

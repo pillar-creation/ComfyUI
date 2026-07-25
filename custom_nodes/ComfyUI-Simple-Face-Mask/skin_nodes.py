@@ -106,7 +106,7 @@ FACE_SLIM_INPUT = {
             "min": 0.0,
             "max": 100.0,
             "step": 1.0,
-            "tooltip": "下颌收窄（可选）。建议低于 face_slim，避免下巴过尖。",
+            "tooltip": "下颌收窄。仅瘦下颚时保持 face_slim=0，只调此项（更快）。",
         },
     ),
     "naturalness": (
@@ -322,7 +322,7 @@ class FaceSkinEyeSize:
 
 
 class FaceSkinFaceSlim:
-    """MediaPipe 检测面颊/下颌 → 向面部中线水平收缩（瘦脸）。"""
+    """MediaPipe 检测下颌/面颊 → 仅在脸部 ROI 内水平收缩（瘦脸）。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -632,13 +632,116 @@ class FaceSkinRegionMask:
         return (torch.from_numpy(masks[region]).unsqueeze(0),)
 
 
-# BGR overlay colors + legend labels
+class FaceSkinRegionMaskPreview:
+    """Region mask + colored overlay preview (nasolabial = yellow lines on face)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "region": (["face", "under_eye", "nasolabial", "cheek"],),
+                **DETECT_INPUTS,
+                "overlay_alpha": (
+                    "FLOAT",
+                    {"default": 0.85, "min": 0.3, "max": 1.0, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("overlay_preview", "mask")
+    FUNCTION = "preview"
+    CATEGORY = "image/beauty"
+
+    def preview(
+        self,
+        image,
+        region,
+        skin_mask_mode,
+        padding_percent,
+        mask_edge_blur,
+        min_detection_confidence,
+        min_presence_confidence,
+        fallback_center_if_no_face,
+        overlay_alpha=0.85,
+    ):
+        _require_batch1(image, "FaceSkinRegionMaskPreview")
+        frame = _frame_uint8(image)
+        masks = detect_masks_from_rgb_frame(
+            frame,
+            padding_percent,
+            mask_edge_blur,
+            min_detection_confidence,
+            min_presence_confidence,
+            fallback_center_if_no_face,
+            skin_mask_mode=skin_mask_mode,
+        )
+        m = masks[region]
+        bgr = image_to_bgr_uint8(frame)
+        color = _MASK_OVERLAY_COLORS[region][0]
+        display_m = np.clip(m, 0.0, 1.0)
+        if region == "nasolabial" and display_m.max() > 0:
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            dm = cv2.dilate((display_m * 255).astype(np.uint8), k, iterations=1)
+            display_m = dm.astype(np.float32) / 255.0
+        alpha = float(np.clip(overlay_alpha, 0.3, 1.0))
+        out = _blend_color_mask(bgr, display_m, color, alpha)
+        cov = float(m.mean()) * 100.0
+        out = _draw_mask_legend(out, [f"{region} {cov:.2f}%", "cyan/yellow = mask area"])
+        preview = torch.from_numpy(bgr_to_rgb_float01(out)).unsqueeze(0)
+        return preview, torch.from_numpy(m.astype(np.float32)).unsqueeze(0)
+
+
+class FaceSkinMaskOverlayPreview:
+    """Overlay an existing MASK on image (for nasolabial preview from DetectMasks)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "overlay_alpha": (
+                    "FLOAT",
+                    {"default": 0.88, "min": 0.3, "max": 1.0, "step": 0.05},
+                ),
+                "label": ("STRING", {"default": "nasolabial"}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("overlay_preview",)
+    FUNCTION = "preview"
+    CATEGORY = "image/beauty"
+
+    def preview(self, image, mask, overlay_alpha=0.88, label="nasolabial"):
+        _require_batch1(image, "FaceSkinMaskOverlayPreview")
+        frame = _frame_uint8(image)
+        h, w = frame.shape[:2]
+        m = _mask_numpy(mask, (h, w))
+        bgr = image_to_bgr_uint8(frame)
+        color = (80, 220, 220)
+        display_m = np.clip(m, 0.0, 1.0)
+        if display_m.max() > 0:
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            dm = cv2.dilate((display_m * 255).astype(np.uint8), k, iterations=1)
+            display_m = dm.astype(np.float32) / 255.0
+        alpha = float(np.clip(overlay_alpha, 0.3, 1.0))
+        out = _blend_color_mask(bgr, display_m, color, alpha)
+        cov = float(m.mean()) * 100.0
+        out = _draw_mask_legend(out, [f"{label} {cov:.2f}%", "cyan = nasolabial mask"])
+        return (torch.from_numpy(bgr_to_rgb_float01(out)).unsqueeze(0),)
+
+
+# BGR overlay colors + legend labels (ASCII — cv2.putText cannot render CJK)
 _MASK_OVERLAY_COLORS = {
-    "face": ((80, 220, 80), "face=green"),
-    "cheek": ((200, 80, 220), "cheek=magenta"),
-    "nasolabial": ((80, 220, 220), "nasolabial=yellow"),
-    "under_eye": ((220, 200, 80), "under_eye=cyan"),
+    "face": ((80, 220, 80), "face"),
+    "under_eye": ((220, 200, 80), "under_eye"),
+    "cheek": ((200, 80, 220), "cheek/plump"),
+    "nasolabial": ((80, 220, 220), "nasolabial"),
 }
+_MASK_OVERLAY_ORDER = ("face", "under_eye", "cheek", "nasolabial")
 
 
 def _draw_mask_legend(bgr: np.ndarray, lines: list[str]) -> np.ndarray:
@@ -756,11 +859,14 @@ class FaceSkinMaskCheckPreview:
         alpha = float(np.clip(overlay_alpha, 0.1, 0.9))
         out = bgr.copy()
         stats = []
-        for key, (color, label) in _MASK_OVERLAY_COLORS.items():
-            m = {"face": face_m, "under_eye": under_m, "nasolabial": naso_m, "cheek": cheek_m}[key]
+        mask_map = {"face": face_m, "under_eye": under_m, "nasolabial": naso_m, "cheek": cheek_m}
+        for key in _MASK_OVERLAY_ORDER:
+            color, label = _MASK_OVERLAY_COLORS[key]
+            m = mask_map[key]
             cov = float(m.mean()) * 100.0
             stats.append(f"{label} {cov:.1f}%")
-            out = _blend_color_mask(out, m, color, alpha)
+            key_alpha = min(0.9, alpha * 1.3) if key == "nasolabial" else alpha
+            out = _blend_color_mask(out, m, color, key_alpha)
 
         union = np.clip(np.maximum.reduce([face_m, under_m, naso_m, cheek_m]), 0.0, 1.0)
         if show_legend:
@@ -977,6 +1083,8 @@ NODE_CLASS_MAPPINGS = {
     "FaceSkinEyeMaskPreview": FaceSkinEyeMaskPreview,
     "FaceSkinMaskCheckPreview": FaceSkinMaskCheckPreview,
     "FaceSkinRegionMask": FaceSkinRegionMask,
+    "FaceSkinRegionMaskPreview": FaceSkinRegionMaskPreview,
+    "FaceSkinMaskOverlayPreview": FaceSkinMaskOverlayPreview,
     "FaceSkinSpotRemove": FaceSkinSpotRemove,
     "FaceSkinSmooth": FaceSkinSmooth,
     "FaceSkinEvenTone": FaceSkinEvenTone,
@@ -998,6 +1106,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FaceSkinEyeMaskPreview": "Eye Mask Preview 眼蒙版预览",
     "FaceSkinMaskCheckPreview": "Mask Check 蒙版检查",
     "FaceSkinRegionMask": "Face Skin Region Mask",
+    "FaceSkinRegionMaskPreview": "Region Mask Preview 区域蒙版预览",
+    "FaceSkinMaskOverlayPreview": "Mask Overlay Preview 蒙版叠加预览",
     "FaceSkinSpotRemove": "2. Spot Remove 祛斑祛痘",
     "FaceSkinSmooth": "3. Smooth 磨皮",
     "FaceSkinEvenTone": "4. Even Tone 匀肤",

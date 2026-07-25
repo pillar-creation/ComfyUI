@@ -125,15 +125,49 @@ def apply_spot_remove(bgr: np.ndarray, mask: np.ndarray, amount: float) -> np.nd
 
 
 def apply_nasolabial(bgr: np.ndarray, mask: np.ndarray, amount: float) -> np.ndarray:
+    """Soften nasolabial ribbon: inpaint dark crease + smooth/lift full mask band."""
     s = strength_01(amount)
     if s <= 0:
         return bgr
-    k = int(5 + s * 14)
-    if k % 2 == 0:
-        k += 1
-    effect = cv2.GaussianBlur(bgr, (k, k), 0)
-    effect = cv2.bilateralFilter(effect, 5, 40 + s * 40, 40 + s * 40)
-    return blend_mask(bgr, effect, mask, s * 0.9)
+    m = np.clip(mask, 0.0, 1.0)
+    if m.max() <= 0:
+        return bgr
+
+    m8 = (m * 255).astype(np.uint8)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    proc_m = cv2.dilate(m8, k, iterations=1).astype(np.float32) / 255.0
+
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    blur_g = cv2.GaussianBlur(gray, (0, 0), 2.2 + s * 2.5)
+    dark = np.clip(blur_g - gray, 0.0, 255.0)
+
+    thr = max(2.0, 7.0 - s * 5.0)
+    crease = ((dark >= thr).astype(np.uint8) * 255)
+    crease = cv2.bitwise_and(crease, (proc_m * 255).astype(np.uint8))
+    if crease.max() > 0:
+        crease = cv2.morphologyEx(
+            crease, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), 1
+        )
+
+    out = bgr
+    if crease.max() > 0:
+        radius = max(3, int(3 + s * 4))
+        inpainted = cv2.inpaint(bgr, crease, radius, cv2.INPAINT_NS)
+        crease_f = cv2.GaussianBlur(crease.astype(np.float32) / 255.0, (5, 5), 0)
+        out = blend_mask(bgr, inpainted, crease_f, 0.8 + s * 0.2)
+
+    d = int(5 + s * 9)
+    sigma = int(28 + s * 52)
+    smooth = cv2.bilateralFilter(out, d, sigma, sigma)
+
+    lab = cv2.cvtColor(smooth, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lift = s * (10.0 + dark * 0.08)
+    lab[:, :, 0] = np.clip(lab[:, :, 0] + lift, 0.0, 255.0)
+    smooth_lift = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    dark_w = np.clip(dark / 35.0, 0.0, 1.0) * proc_m
+    effect_m = np.clip(proc_m * (0.55 + s * 0.4) + dark_w * 0.25, 0.0, 1.0)
+    return blend_mask(out, smooth_lift, effect_m, 0.7 + s * 0.3)
 
 
 def apply_dark_circle(bgr: np.ndarray, mask: np.ndarray, amount: float) -> np.ndarray:

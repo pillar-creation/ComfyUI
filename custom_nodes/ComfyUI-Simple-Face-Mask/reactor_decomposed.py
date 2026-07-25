@@ -494,6 +494,7 @@ def paste_back_features(
     include_eyes: bool = True,
     include_nose: bool = True,
     include_mouth: bool = True,
+    include_face_triangle: bool = False,
     min_detection_confidence: float = 0.5,
     min_presence_confidence: float = 0.5,
     mask_edge_blur: int = 5,
@@ -546,6 +547,7 @@ def paste_back_features(
             include_eyes=include_eyes,
             include_nose=include_nose,
             include_mouth=include_mouth,
+            include_face_triangle=include_face_triangle,
             mask_edge_blur=mask_edge_blur,
             brow_thickness=brow_thickness,
             forehead_trim=forehead_trim,
@@ -572,7 +574,11 @@ def paste_back_features(
         mask_blur=mask_blur,
     )
 
-    if crop_face_region_mask is not None and face_region is not None:
+    if (
+        crop_face_region_mask is not None
+        and face_region is not None
+        and face_region.max() > 0
+    ):
         target_region = _warp_feature_mask_to_target(
             face_region,
             m,
@@ -918,6 +924,13 @@ class ReActorFeatureMaskPreview:
                 "include_eyes": ("BOOLEAN", {"default": True}),
                 "include_nose": ("BOOLEAN", {"default": True}),
                 "include_mouth": ("BOOLEAN", {"default": True}),
+                "include_face_triangle": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": "脸部三角区（内眦→嘴角→下巴 + 法令纹），填充面中衔接皮肤。",
+                    },
+                ),
                 "min_detection_confidence": (
                     "FLOAT",
                     {"default": 0.5, "min": 0.1, "max": 0.9, "step": 0.05},
@@ -957,6 +970,7 @@ class ReActorFeatureMaskPreview:
         include_eyes,
         include_nose,
         include_mouth,
+        include_face_triangle,
         min_detection_confidence,
         min_presence_confidence,
         mask_edge_blur,
@@ -978,6 +992,7 @@ class ReActorFeatureMaskPreview:
             include_eyes=include_eyes,
             include_nose=include_nose,
             include_mouth=include_mouth,
+            include_face_triangle=include_face_triangle,
             mask_edge_blur=mask_edge_blur,
             brow_thickness=brow_thickness,
             forehead_trim=forehead_trim,

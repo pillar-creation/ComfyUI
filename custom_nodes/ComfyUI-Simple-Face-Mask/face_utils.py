@@ -36,8 +36,42 @@ _CAT_HAIR = 1
 _CAT_BODY_SKIN = 2
 _CAT_FACE_SKIN = 3
 
-_LANDMARKER = None
+_LANDMARKER_CACHE: dict[tuple[float, float], object] = {}
 _SEGMENTER = None
+
+# Workflows often mix 0.5 (detect) and 0.35 (slim/eye); warm both at startup.
+_DEFAULT_LANDMARKER_CONFIDENCES = ((0.5, 0.5), (0.35, 0.5))
+
+
+def sanitize_landmark_confidence(value, *, default: float = 0.5) -> float:
+    """Clamp to MediaPipe range; reject misaligned widget values (e.g. 5 from mask_edge_blur)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v > 1.0 or v < 0.0:
+        return default
+    return max(0.1, min(0.9, v))
+
+
+def sanitize_brow_thickness(value, *, default: float = 1.0) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v > 2.5:
+        return default
+    return max(0.5, min(2.0, v))
+
+
+def sanitize_mask_edge_blur(value, *, default: int = 5) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+    if v > 21:
+        return default
+    return max(0, min(21, v))
 
 SKIN_MASK_MODES = ("semantic", "landmarks")
 
@@ -338,9 +372,12 @@ def ensure_segmenter_model() -> Path:
 
 
 def _get_landmarker(min_detection_confidence: float, min_presence_confidence: float):
-    global _LANDMARKER
-    if _LANDMARKER is not None:
-        return _LANDMARKER
+    det = sanitize_landmark_confidence(min_detection_confidence)
+    pres = sanitize_landmark_confidence(min_presence_confidence)
+    params = (det, pres)
+    cached = _LANDMARKER_CACHE.get(params)
+    if cached is not None:
+        return cached
 
     from mediapipe.tasks import python as mp_python
     from mediapipe.tasks.python import vision
@@ -349,14 +386,15 @@ def _get_landmarker(min_detection_confidence: float, min_presence_confidence: fl
         base_options=mp_python.BaseOptions(model_asset_path=str(ensure_landmarker_model())),
         running_mode=vision.RunningMode.IMAGE,
         num_faces=3,
-        min_face_detection_confidence=float(min_detection_confidence),
-        min_face_presence_confidence=float(min_presence_confidence),
-        min_tracking_confidence=float(min_presence_confidence),
+        min_face_detection_confidence=det,
+        min_face_presence_confidence=pres,
+        min_tracking_confidence=pres,
         output_face_blendshapes=False,
         output_facial_transformation_matrixes=False,
     )
-    _LANDMARKER = vision.FaceLandmarker.create_from_options(options)
-    return _LANDMARKER
+    landmarker = vision.FaceLandmarker.create_from_options(options)
+    _LANDMARKER_CACHE[params] = landmarker
+    return landmarker
 
 
 def _get_segmenter():
@@ -377,6 +415,40 @@ def _get_segmenter():
     return _SEGMENTER
 
 
+def preload_mediapipe(
+    *,
+    min_detection_confidence: float = 0.5,
+    min_presence_confidence: float = 0.5,
+    load_segmenter: bool = True,
+    extra_landmarker_confidences: tuple[tuple[float, float], ...] = _DEFAULT_LANDMARKER_CONFIDENCES,
+) -> None:
+    """Eagerly download models and create MediaPipe task runners (startup warmup)."""
+    import time
+
+    import mediapipe as mp  # noqa: F401
+
+    t0 = time.perf_counter()
+    ensure_landmarker_model()
+    seen: set[tuple[float, float]] = set()
+    for det, pres in ((min_detection_confidence, min_presence_confidence), *extra_landmarker_confidences):
+        key = (
+            sanitize_landmark_confidence(det),
+            sanitize_landmark_confidence(pres),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        _get_landmarker(key[0], key[1])
+    if load_segmenter:
+        ensure_segmenter_model()
+        _get_segmenter()
+    elapsed = time.perf_counter() - t0
+    print(
+        f"[ComfyUI-Simple-Face-Mask] MediaPipe preloaded in {elapsed:.1f}s "
+        f"({len(_LANDMARKER_CACHE)} landmarker, segmenter={'yes' if _SEGMENTER else 'no'})"
+    )
+
+
 def _landmark_xy(landmarks, index: int, width: int, height: int) -> tuple[int, int]:
     lm = landmarks[index]
     return int(lm.x * width), int(lm.y * height)
@@ -389,6 +461,20 @@ def _points_for_indices(landmarks, width: int, height: int, indices: list[int]) 
         if 0 <= i < n:
             pts.append(_landmark_xy(landmarks, i, width, height))
     if len(pts) < 3:
+        return np.zeros((0, 2), dtype=np.int32)
+    return np.array(pts, dtype=np.int32)
+
+
+def _polyline_points_for_indices(
+    landmarks, width: int, height: int, indices: list[int]
+) -> np.ndarray:
+    """At least 2 points — for open polylines (nasolabial paths)."""
+    pts = []
+    n = len(landmarks)
+    for i in indices:
+        if 0 <= i < n:
+            pts.append(_landmark_xy(landmarks, i, width, height))
+    if len(pts) < 2:
         return np.zeros((0, 2), dtype=np.int32)
     return np.array(pts, dtype=np.int32)
 
@@ -1236,12 +1322,622 @@ def _clip_mask_to_region(mask: np.ndarray, region: np.ndarray) -> np.ndarray:
     return np.clip(mask * np.clip(region, 0.0, 1.0), 0.0, 1.0)
 
 
+# 脸部三角区：内眦为顶、嘴角+下巴为底，并 union 左右法令纹窄带
+_FACE_TRIANGLE_OUTLINE = (362, 133, 291, 152, 61)
+
+# 法令纹：嘴角锚定 + 鼻尖定左右 + 沟槽点控弧线
+_NASOLABIAL_SIDE_DEFS: tuple[tuple[int, tuple[int, ...], str], ...] = (
+    (61, (48, 219, 220, 98), "nasolabial_left"),
+    (291, (278, 437, 326, 327), "nasolabial_right"),
+)
+_NASOLABIAL_FOLD_TRIM = 7
+
+
+def _nasolabial_midline_x(landmarks, width: int) -> float:
+    for idx in (1, 4, 2, 94, 19):
+        if 0 <= idx < len(landmarks):
+            return float(landmarks[idx].x * width)
+    left, _, right, _ = _landmark_bbox(landmarks, width, 1, 0.0)
+    return 0.5 * (left + right)
+
+
+def _outer_nostril_for_mouth(
+    landmarks, width: int, height: int, mouth_idx: int, candidates: tuple[int, ...]
+) -> np.ndarray | None:
+    if not (0 <= mouth_idx < len(landmarks)):
+        return None
+    mx, _ = _landmark_xy(landmarks, mouth_idx, width, height)
+    mid_x = _nasolabial_midline_x(landmarks, width)
+    mouth_on_left = mx < mid_x
+    best: np.ndarray | None = None
+    best_dist = -1.0
+    for idx in candidates:
+        if not (0 <= idx < len(landmarks)):
+            continue
+        x, y = _landmark_xy(landmarks, idx, width, height)
+        side_dist = (mid_x - x) if mouth_on_left else (x - mid_x)
+        if side_dist <= 0:
+            continue
+        if side_dist > best_dist:
+            best_dist = side_dist
+            best = np.array([x, y], dtype=np.float32)
+    if best is not None:
+        return best
+    for idx in candidates:
+        if not (0 <= idx < len(landmarks)):
+            continue
+        x, y = _landmark_xy(landmarks, idx, width, height)
+        side_dist = abs((mid_x - x) if mouth_on_left else (x - mid_x))
+        if side_dist > best_dist:
+            best_dist = side_dist
+            best = np.array([x, y], dtype=np.float32)
+    return best
+
+
+def _perp_dist_to_segment(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    denom = float(np.dot(ab, ab))
+    if denom < 1.0:
+        return float(np.linalg.norm(p - a))
+    t = float(np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0))
+    proj = a + t * ab
+    return float(np.linalg.norm(p - proj))
+
+
+def _fold_control_for_side(
+    landmarks,
+    width: int,
+    height: int,
+    nostril: np.ndarray,
+    mouth: np.ndarray,
+    fold_indices: list[int],
+) -> np.ndarray:
+    mx, my = int(mouth[0]), int(mouth[1])
+    mid_x = _nasolabial_midline_x(landmarks, width)
+    mouth_on_left = mx < mid_x
+    y0, y1 = sorted((int(nostril[1]), my))
+    face_left, _, face_right, _ = _landmark_bbox(landmarks, width, height, 0.0)
+    face_w = max(40.0, float(face_right - face_left))
+
+    best_pt: np.ndarray | None = None
+    best_score = -1.0
+    for idx in fold_indices[:24]:
+        if not (0 <= idx < len(landmarks)):
+            continue
+        x, y = _landmark_xy(landmarks, idx, width, height)
+        if y < y0 - 4 or y > y1 + 8:
+            continue
+        side = (mid_x - x) if mouth_on_left else (x - mid_x)
+        if side <= face_w * 0.01:
+            continue
+        p = np.array([x, y], dtype=np.float32)
+        score = _perp_dist_to_segment(p, nostril, mouth) + side * 0.15
+        if score > best_score:
+            best_score = score
+            best_pt = p
+
+    if best_pt is not None:
+        return best_pt
+
+    mid = nostril + 0.5 * (mouth - nostril)
+    outward = -face_w * 0.085 if mouth_on_left else face_w * 0.085
+    return mid + np.array([outward, face_w * 0.02], dtype=np.float32)
+
+
+def _nasolabial_fold_endpoints(
+    landmarks,
+    width: int,
+    height: int,
+    nostril: np.ndarray,
+    mouth: np.ndarray,
+    mouth_idx: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Start at outer ala; end above mouth corner (do not cover nostril hole or lips)."""
+    face_left, _, face_right, _ = _landmark_bbox(landmarks, width, height, 0.0)
+    face_w = max(40.0, float(face_right - face_left))
+    mid_x = _nasolabial_midline_x(landmarks, width)
+    mouth_on_left = float(mouth[0]) < mid_x
+    cheek_sign = -1.0 if mouth_on_left else 1.0
+
+    chord = mouth - nostril
+    # 起点：贴鼻翼外侧 landmark，仅微向颊部外移（不沿沟槽下移）
+    start = nostril.astype(np.float32).copy()
+    start[0] += cheek_sign * face_w * 0.012
+
+    # 终点：不到嘴角，停在沟槽上段并略上提
+    end = nostril + 0.70 * chord
+    end[1] -= face_w * 0.018
+
+    upper_lip = {61: 78, 291: 308}.get(mouth_idx)
+    if upper_lip is not None and 0 <= upper_lip < len(landmarks):
+        ux, uy = _landmark_xy(landmarks, upper_lip, width, height)
+        end[0] = 0.55 * end[0] + 0.45 * float(ux)
+        end[1] = min(float(end[1]), float(uy) - face_w * 0.008)
+
+    return start, end
+
+
+def _clip_mask_cheek_side_of_nostril(
+    mask: np.ndarray,
+    nostril: np.ndarray,
+    mouth_on_left: bool,
+    *,
+    margin_px: int = 2,
+) -> np.ndarray:
+    """Keep ribbon on cheek side of outer ala — drop medial bleed into nostril."""
+    if mask.max() <= 0:
+        return mask
+    out = mask.copy()
+    nx = int(round(float(nostril[0])))
+    m = max(0, int(margin_px))
+    if mouth_on_left:
+        out[:, min(out.shape[1], nx + m) :] = 0.0
+    else:
+        out[:, : max(0, nx - m)] = 0.0
+    return out
+
+
+def _suppress_band_endpoint_caps(
+    band: np.ndarray,
+    pts: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """Distance-band round caps at polyline ends → remove endpoint blobs."""
+    if band.max() <= 0 or pts.shape[0] < 2:
+        return band
+    out = band.copy()
+    r = max(2, int(round(radius)))
+    for pt in (pts[0], pts[-1]):
+        cx, cy = int(pt[0]), int(pt[1])
+        cap = np.zeros_like(out)
+        cv2.circle(cap, (cx, cy), r, 1.0, -1, lineType=cv2.LINE_AA)
+        out = np.clip(out * (1.0 - cap), 0.0, 1.0)
+    return out
+
+
+def _nasolabial_side_curve(
+    landmarks,
+    width: int,
+    height: int,
+    mouth_idx: int,
+    nostril_candidates: tuple[int, ...],
+    fold_path_key: str,
+    *,
+    samples: int = 24,
+) -> np.ndarray:
+    if not (0 <= mouth_idx < len(landmarks)):
+        return np.zeros((0, 2), dtype=np.int32)
+
+    nostril = _outer_nostril_for_mouth(landmarks, width, height, mouth_idx, nostril_candidates)
+    if nostril is None:
+        return np.zeros((0, 2), dtype=np.int32)
+
+    mouth = np.array(_landmark_xy(landmarks, mouth_idx, width, height), dtype=np.float32)
+    start, end = _nasolabial_fold_endpoints(landmarks, width, height, nostril, mouth, mouth_idx)
+    fold_indices = list(_REGION_INDEX_SETS.get(fold_path_key, ()))[: _NASOLABIAL_FOLD_TRIM * 3]
+    p1 = _fold_control_for_side(landmarks, width, height, nostril, mouth, fold_indices)
+
+    pts: list[np.ndarray] = []
+    for t in np.linspace(0.0, 1.0, max(12, samples)):
+        q = (1.0 - t) ** 2 * start + 2.0 * (1.0 - t) * t * p1 + t**2 * end
+        pts.append(q)
+    return np.round(np.array(pts, dtype=np.float32)).astype(np.int32)
+
+
+def _side_mask_from_curve(
+    height: int,
+    width: int,
+    pts: np.ndarray,
+    ribbon: float,
+    stroke: float,
+) -> np.ndarray:
+    if pts.shape[0] < 2:
+        return np.zeros((height, width), dtype=np.float32)
+    line = _polyline_stroke_mask_tight(height, width, pts, stroke)
+    band = _distance_band_from_polyline(height, width, pts, ribbon)
+    band = _suppress_band_endpoint_caps(band, pts, ribbon * 0.9)
+    return np.clip(line + band * 0.48, 0.0, 1.0)
+
+
+def _subtract_philtrum_overlap(
+    left_mask: np.ndarray,
+    right_mask: np.ndarray,
+    landmarks,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    if left_mask.max() <= 0 and right_mask.max() <= 0:
+        return np.zeros_like(left_mask)
+    face_left, _, face_right, _ = _landmark_bbox(landmarks, width, height, 0.0)
+    face_w = max(40.0, float(face_right - face_left))
+    mid_x = _nasolabial_midline_x(landmarks, width)
+    half = max(4.0, face_w * 0.03)
+    x0 = max(0, int(mid_x - half))
+    x1 = min(width, int(mid_x + half) + 1)
+    cut = np.ones((height, width), dtype=np.float32)
+    cut[:, x0:x1] = 0.0
+    return np.clip(left_mask * cut + right_mask * cut, 0.0, 1.0)
+
+
+def _landmark_xy_mean(
+    landmarks, width: int, height: int, indices: tuple[int, ...]
+) -> np.ndarray | None:
+    pts: list[np.ndarray] = []
+    n = len(landmarks)
+    for idx in indices:
+        if 0 <= idx < n:
+            x, y = _landmark_xy(landmarks, idx, width, height)
+            pts.append(np.array([x, y], dtype=np.float32))
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def _clip_mask_below_mouth(
+    mask: np.ndarray,
+    landmarks,
+    width: int,
+    height: int,
+    margin_px: int = 10,
+) -> np.ndarray:
+    """Drop spill below each mouth corner (per side), not global min-y."""
+    if mask.max() <= 0:
+        return mask
+    out = mask.copy()
+    for mouth_idx in (61, 291):
+        if not (0 <= mouth_idx < len(landmarks)):
+            continue
+        mx, my = _landmark_xy(landmarks, mouth_idx, width, height)
+        y_max = min(height - 1, my + margin_px)
+        x_half = max(12, int(width * 0.06))
+        x0 = max(0, mx - x_half)
+        x1 = min(width, mx + x_half + 1)
+        out[y_max + 1 :, x0:x1] = 0.0
+    return out
+
+
+# 面颊丰盈区：小椭圆中心点（非整块凸包）
+_CHEEK_PLUMP_CENTERS = (205, 425)
+
+
+def _landmark_face_oval_clip(
+    landmarks,
+    height: int,
+    width: int,
+    *,
+    inset_ratio: float = 0.025,
+) -> np.ndarray:
+    """Tight face-oval boundary (landmarks), slightly eroded — avoids semantic skin bleed."""
+    idx = _REGION_INDEX_SETS["face_oval"]
+    oval = _fill_polygon_mask(
+        height, width, _points_for_indices(landmarks, width, height, idx), blur=0
+    )
+    if oval.max() <= 0:
+        return oval
+    left, top, right, bottom = _landmark_bbox(landmarks, width, height, 0.0)
+    erode_px = max(2, int(min(right - left, bottom - top) * inset_ratio))
+    k = erode_px * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    eroded = cv2.erode((oval * 255).astype(np.uint8), kernel, iterations=1)
+    return eroded.astype(np.float32) / 255.0
+
+
+def _distance_band_from_polyline(
+    height: int,
+    width: int,
+    pts: np.ndarray,
+    max_dist: float,
+) -> np.ndarray:
+    """Pixels within max_dist of the fold centerline."""
+    if pts.shape[0] < 2:
+        return np.zeros((height, width), dtype=np.float32)
+    line = np.zeros((height, width), dtype=np.uint8)
+    cv2.polylines(line, [pts.reshape(-1, 1, 2).astype(np.int32)], False, 255, 1, cv2.LINE_8)
+    dist = cv2.distanceTransform(255 - line, cv2.DIST_L2, 3)
+    return (dist <= max(1.5, max_dist)).astype(np.float32)
+
+
+def _polyline_stroke_mask_tight(
+    height: int,
+    width: int,
+    pts: np.ndarray,
+    thickness: float,
+) -> np.ndarray:
+    """Thin fold ribbon without extra feather blur."""
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if pts.shape[0] < 2:
+        return mask.astype(np.float32) / 255.0
+    thick = max(1, int(round(thickness)))
+    cv2.polylines(
+        mask,
+        [pts.reshape(-1, 1, 2).astype(np.int32)],
+        False,
+        255,
+        thick,
+        cv2.LINE_AA,
+    )
+    return mask.astype(np.float32) / 255.0
+
+
+def _snap_nasolabial_to_crease(
+    bgr: np.ndarray,
+    guide: np.ndarray,
+    clip: np.ndarray,
+    search_px: int,
+) -> np.ndarray:
+    """Expand guide to cover visible dark crease pixels near the landmark path."""
+    guide = np.clip(guide, 0.0, 1.0)
+    clip = np.clip(clip, 0.0, 1.0)
+    if guide.max() <= 0:
+        return guide
+
+    g8 = (guide * 255).astype(np.uint8)
+    k = max(5, int(search_px) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    search = cv2.dilate(g8, kernel, iterations=1)
+    search = cv2.bitwise_and(search, (clip * 255).astype(np.uint8))
+    if search.max() == 0:
+        return guide
+
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    local = cv2.GaussianBlur(gray, (0, 0), 3.0)
+    dark = np.clip(local - gray, 0.0, 255.0)
+
+    vals = dark[search > 16]
+    if vals.size < 12:
+        return guide
+
+    thr = float(np.percentile(vals, 55))
+    crease = ((dark >= thr).astype(np.uint8) * 255)
+    crease = cv2.bitwise_and(crease, search)
+    crease = cv2.morphologyEx(
+        crease, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), 1
+    )
+
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(crease, connectivity=8)
+    if num <= 1:
+        return guide
+
+    kept = np.zeros_like(crease)
+    max_area = max(32, int(search.sum() / 255.0 * 0.45))
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) <= max_area:
+            kept[labels == i] = 255
+
+    if kept.max() == 0:
+        return guide
+
+    crease_f = kept.astype(np.float32) / 255.0
+    out = np.clip(np.maximum(guide, crease_f * 0.92), 0.0, 1.0)
+    return np.clip(out * clip, 0.0, 1.0)
+
+
+def _refine_nasolabial_crease_mask(
+    bgr: np.ndarray,
+    corridor: np.ndarray,
+    clip_mask: np.ndarray,
+    *,
+    centerline: np.ndarray | None = None,
+) -> np.ndarray:
+    """Keep thin dark crease pixels near fold centerline; never expand to cheek blobs."""
+    corridor = np.clip(corridor, 0.0, 1.0)
+    clip_mask = np.clip(clip_mask, 0.0, 1.0)
+    guide = np.clip(corridor * clip_mask, 0.0, 1.0)
+    if guide.max() <= 0:
+        return guide
+
+    skeleton = centerline if centerline is not None else corridor
+    sk8 = (np.clip(skeleton, 0, 1) * 255).astype(np.uint8)
+    near = cv2.dilate(sk8, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), 1)
+    near_f = near.astype(np.float32) / 255.0
+
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    local = cv2.GaussianBlur(gray, (0, 0), 2.5)
+    dark = np.clip(local - gray, 0.0, 255.0)
+
+    g8 = (guide * 255).astype(np.uint8)
+    vals = dark[(near_f > 0.5) & (g8 > 16)]
+    if vals.size < 6:
+        return guide
+
+    thr = float(np.percentile(vals, 78))
+    crease = ((dark >= thr).astype(np.uint8) * 255)
+    crease = cv2.bitwise_and(crease, g8)
+    crease = cv2.bitwise_and(crease, near)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    crease = cv2.morphologyEx(crease, cv2.MORPH_OPEN, k, iterations=1)
+
+    num, labels, stats, centroids = cv2.connectedComponentsWithStats(crease, connectivity=8)
+    if num <= 1:
+        return guide
+
+    kept = np.zeros_like(crease)
+    max_area = max(12, min(96, int(guide.sum() / 255.0 * 0.06)))
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area <= max_area:
+            kept[labels == i] = 255
+
+    if kept.max() == 0:
+        return guide
+
+    crease_f = kept.astype(np.float32) / 255.0
+    refined = cv2.GaussianBlur((crease_f * 255).astype(np.uint8), (3, 3), 0).astype(np.float32) / 255.0
+    refined = np.clip(refined * clip_mask, 0.0, 1.0)
+    if refined.mean() > max(0.004, guide.mean() * 2.5):
+        return guide
+    return refined
+
+
+def build_cheek_plump_mask(
+    landmarks,
+    height: int,
+    width: int,
+    face_skin: np.ndarray,
+    mask_edge_blur: int,
+) -> np.ndarray:
+    """Small cheek ellipses for plump — avoids huge convex-hull blobs in mask preview."""
+    left, top, right, bottom = _landmark_bbox(landmarks, width, height, 0.0)
+    fw = max(12.0, float(right - left))
+    fh = max(12.0, float(bottom - top))
+    oval = _landmark_face_oval_clip(landmarks, height, width, inset_ratio=0.02)
+    face_skin = np.clip(face_skin, 0.0, 1.0)
+    clip = np.clip(np.minimum(face_skin, oval), 0.0, 1.0)
+    union = np.zeros((height, width), dtype=np.float32)
+    rx = max(3, int(fw * 0.055))
+    ry = max(3, int(fh * 0.048))
+
+    for center_idx in _CHEEK_PLUMP_CENTERS:
+        if center_idx >= len(landmarks):
+            continue
+        cx, cy = _landmark_xy(landmarks, center_idx, width, height)
+        m = np.zeros((height, width), dtype=np.uint8)
+        cv2.ellipse(m, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+        union = np.maximum(union, m.astype(np.float32) / 255.0)
+
+    blur = int(mask_edge_blur)
+    if blur > 0 and union.max() > 0:
+        k = max(3, min(blur | 1, 9))
+        union = cv2.GaussianBlur((union * 255).astype(np.uint8), (k, k), 0).astype(np.float32) / 255.0
+    return np.clip(union * clip, 0.0, 1.0)
+
+
+def _face_interior_clip_mask(
+    landmarks,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    """Face interior for clipping; falls back to bbox ellipse if oval landmarks collapse."""
+    idx = _REGION_INDEX_SETS
+    oval = _fill_polygon_mask(
+        height,
+        width,
+        _points_for_indices(landmarks, width, height, idx["face_oval"]),
+        blur=0,
+    )
+    if oval.mean() >= 0.03:
+        return np.clip(oval, 0.0, 1.0)
+
+    left, top, right, bottom = _landmark_bbox(landmarks, width, height, 0.04)
+    cx = (left + right) // 2
+    cy = (top + bottom) // 2
+    rx = max(1, (right - left) // 2)
+    ry = max(1, (bottom - top) // 2)
+    m = np.zeros((height, width), dtype=np.uint8)
+    cv2.ellipse(m, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+    return m.astype(np.float32) / 255.0
+
+
+def build_nasolabial_fold_mask(
+    landmarks,
+    height: int,
+    width: int,
+    mask_edge_blur: int,
+    face_skin: np.ndarray,
+    frame_rgb: np.ndarray | None = None,
+    *,
+    strip_scale: float = 0.38,
+) -> np.ndarray:
+    """Per-side arcs: outer nostril → fold bulge → mouth corner (61 / 291)."""
+    left, top, right, bottom = _landmark_bbox(landmarks, width, height, 0.0)
+    face_w = max(40.0, float(right - left))
+    scale = max(0.85, float(strip_scale))
+    ribbon = max(5, int(face_w * 0.015 * scale))
+    stroke = max(3, int(ribbon * 0.42))
+
+    idx = _REGION_INDEX_SETS
+    oval = _face_interior_clip_mask(landmarks, height, width)
+    lips = _fill_polygon_mask(
+        height,
+        width,
+        _points_for_indices(landmarks, width, height, idx["lips"]),
+        blur=3,
+    )
+    nose = _fill_polygon_mask(
+        height,
+        width,
+        _points_for_indices(landmarks, width, height, idx["nose"]),
+        blur=2,
+    )
+    lip_keep = np.clip(1.0 - np.clip(lips, 0.0, 1.0) * 0.92, 0.0, 1.0)
+    nose_keep = np.clip(1.0 - np.clip(nose, 0.0, 1.0) * 0.75, 0.0, 1.0)
+    clip_mask = np.clip(oval * lip_keep * nose_keep, 0.0, 1.0)
+
+    side_masks: list[np.ndarray] = []
+    mid_x = _nasolabial_midline_x(landmarks, width)
+    for mouth_idx, nostril_ids, fold_key in _NASOLABIAL_SIDE_DEFS:
+        pts = _nasolabial_side_curve(
+            landmarks, width, height, mouth_idx, nostril_ids, fold_key
+        )
+        if pts.shape[0] < 2:
+            continue
+        side = _side_mask_from_curve(height, width, pts, ribbon, stroke)
+        nostril = _outer_nostril_for_mouth(landmarks, width, height, mouth_idx, nostril_ids)
+        if nostril is not None:
+            mx, _ = _landmark_xy(landmarks, mouth_idx, width, height)
+            side = _clip_mask_cheek_side_of_nostril(side, nostril, mx < mid_x, margin_px=2)
+        side_masks.append(side)
+
+    if not side_masks:
+        return np.zeros((height, width), dtype=np.float32)
+
+    if len(side_masks) == 2:
+        union = _subtract_philtrum_overlap(
+            side_masks[0], side_masks[1], landmarks, width, height
+        )
+    else:
+        union = side_masks[0]
+
+    union = np.clip(union * clip_mask, 0.0, 1.0)
+    if union.max() <= 0:
+        union = np.clip(np.maximum.reduce(side_masks), 0.0, 1.0)
+
+    union = _clip_mask_below_mouth(union, landmarks, width, height)
+
+    blur = int(mask_edge_blur)
+    if blur > 0 and union.max() > 0:
+        k = max(3, min(blur | 1, 5))
+        blurred = cv2.GaussianBlur((union * 255).astype(np.uint8), (k, k), 0).astype(np.float32) / 255.0
+        reclipped = np.clip(blurred * clip_mask, 0.0, 1.0)
+        union = reclipped if reclipped.max() > 0 else blurred
+        union = _clip_mask_below_mouth(union, landmarks, width, height)
+
+    return union
+
+
+def build_face_triangle_mask(
+    landmarks,
+    height: int,
+    width: int,
+    mask_edge_blur: int = 5,
+) -> np.ndarray:
+    """Mid-face triangle extended to nasolabial folds (inner eyes → mouth corners → chin)."""
+    blur = int(mask_edge_blur)
+    union = np.zeros((height, width), dtype=np.float32)
+
+    outline = _points_for_indices(landmarks, width, height, list(_FACE_TRIANGLE_OUTLINE))
+    if outline.shape[0] >= 3:
+        union = np.maximum(union, _fill_polygon_mask(height, width, outline, blur))
+
+    for mouth_idx, nostril_ids, fold_key in _NASOLABIAL_SIDE_DEFS:
+        pts = _nasolabial_side_curve(
+            landmarks, width, height, mouth_idx, nostril_ids, fold_key, samples=18
+        )
+        if pts.shape[0] >= 2:
+            spacing = _mean_point_spacing(pts)
+            thick = max(3, spacing * 0.3)
+            union = np.maximum(union, _polyline_stroke_mask_tight(height, width, pts, thick))
+
+    return np.clip(union, 0.0, 1.0)
+
+
 _SWAP_MASK_KWARG_KEYS = frozenset(
     {
         "include_eyebrows",
         "include_eyes",
         "include_nose",
         "include_mouth",
+        "include_face_triangle",
         "mask_edge_blur",
         "brow_thickness",
         "nose_expand",
@@ -1270,6 +1966,7 @@ def build_swap_features_mask(
     include_eyes: bool = True,
     include_nose: bool = True,
     include_mouth: bool = True,
+    include_face_triangle: bool = False,
     mask_edge_blur: int = 5,
     brow_thickness: float = 1.0,
     nose_expand: float = 1.12,
@@ -1311,6 +2008,11 @@ def build_swap_features_mask(
             union,
             _mouth_region_mask(landmarks, width, height, idx["lips"], blur, mouth_expand),
         )
+    if include_face_triangle:
+        union = np.maximum(
+            union,
+            build_face_triangle_mask(landmarks, height, width, blur),
+        )
     union = np.clip(union, 0.0, 1.0)
     if clip_to_face:
         region = face_region
@@ -1339,6 +2041,13 @@ def detect_features_mask_from_bgr(
     **mask_kwargs,
 ) -> tuple[np.ndarray | None, np.ndarray | None, bool]:
     """Detect landmarks on a BGR crop; return (feature_mask, face_region_mask, ok)."""
+    min_detection_confidence = sanitize_landmark_confidence(min_detection_confidence)
+    min_presence_confidence = sanitize_landmark_confidence(min_presence_confidence)
+    mask_kwargs = dict(mask_kwargs)
+    if "mask_edge_blur" in mask_kwargs:
+        mask_kwargs["mask_edge_blur"] = sanitize_mask_edge_blur(mask_kwargs["mask_edge_blur"])
+    if "brow_thickness" in mask_kwargs:
+        mask_kwargs["brow_thickness"] = sanitize_brow_thickness(mask_kwargs["brow_thickness"])
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     h, w = bgr.shape[:2]
     landmarks = detect_face_landmarks(
@@ -1492,23 +2201,17 @@ def build_face_masks_from_landmarks(
         under_eye = cv2.dilate((under_eye * 255).astype(np.uint8), kernel, iterations=1).astype(np.float32) / 255.0
     under_eye = np.clip(under_eye * face_skin, 0.0, 1.0)
 
-    left_cheek = _fill_polygon_mask(
-        height, width, _points_for_indices(landmarks, width, height, idx["left_cheek"]), blur
-    )
-    right_cheek = _fill_polygon_mask(
-        height, width, _points_for_indices(landmarks, width, height, idx["right_cheek"]), blur
-    )
-    cheek = np.clip(left_cheek + right_cheek, 0.0, 1.0)
-    cheek = np.clip(cheek * face_skin, 0.0, 1.0)
+    left_cheek = build_cheek_plump_mask(landmarks, height, width, face_skin, blur)
+    cheek = left_cheek
 
-    naso_l = _fill_polygon_mask(
-        height, width, _points_for_indices(landmarks, width, height, idx["nasolabial_left"]), blur
+    nasolabial = build_nasolabial_fold_mask(
+        landmarks,
+        height,
+        width,
+        blur,
+        face_skin,
+        frame_rgb,
     )
-    naso_r = _fill_polygon_mask(
-        height, width, _points_for_indices(landmarks, width, height, idx["nasolabial_right"]), blur
-    )
-    nasolabial = np.clip(naso_l + naso_r, 0.0, 1.0)
-    nasolabial = np.clip(nasolabial * face_skin, 0.0, 1.0)
 
     return {
         "face": face_skin,
@@ -1533,7 +2236,25 @@ def _fallback_center_masks(height: int, width: int, mask_edge_blur: int) -> dict
 
     face = ellipse(cx, cy, rx, ry)
     under_eye = ellipse(cx, cy - ry // 3, int(rx * 0.75), int(ry * 0.22))
-    nasolabial = ellipse(cx, cy + ry // 2, int(rx * 0.55), int(ry * 0.22))
+
+    def narrow_fold(offset_x: int) -> np.ndarray:
+        m = np.zeros((height, width), dtype=np.uint8)
+        cv2.ellipse(
+            m,
+            (cx + offset_x, cy + ry // 4),
+            (max(1, int(rx * 0.22)), max(1, int(ry * 0.14))),
+            -25 if offset_x < 0 else 25,
+            0,
+            360,
+            255,
+            -1,
+        )
+        if blur > 0:
+            k = max(3, min(blur | 1, 7))
+            m = cv2.GaussianBlur(m, (k, k), 0)
+        return m.astype(np.float32) / 255.0
+
+    nasolabial = np.clip(narrow_fold(-int(rx * 0.55)) + narrow_fold(int(rx * 0.55)), 0.0, 1.0)
     cheek = ellipse(cx, cy, int(rx * 0.65), int(ry * 0.4))
     under_eye = np.clip(under_eye * face, 0.0, 1.0)
     nasolabial = np.clip(nasolabial * face, 0.0, 1.0)
